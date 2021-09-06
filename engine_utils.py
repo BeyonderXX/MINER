@@ -7,7 +7,7 @@ import logging
 import argparse
 
 from torch.utils.data import TensorDataset
-from utils.utils_ner import convert_examples_to_features, read_examples_from_file
+from utils.utils_ner import convert_examples_to_features, read_examples_from_file, build_neg_samples
 
 from transformers import (
     AdamW,
@@ -28,9 +28,6 @@ def set_seed(args):
 # default params
 def arg_parse():
     parser = argparse.ArgumentParser()
-
-    parser.add_argument("--regular_z", action="store_false",
-                        help="Whether add I(x, z) regular.")
 
     parser.add_argument("--baseline", action="store_true",
                         help="Whether to run training.")
@@ -158,11 +155,13 @@ def prepare_optimizer_scheduler(args, model, training_steps):
     if not args.baseline:
         other_parameters = other_parameters \
                            + list(model.post_encoder.named_parameters()) \
-                           + [("r_mean", model.r_mean)] + [("r_std", model.r_std)]
+                           + list(model.entity_regularizer.named_parameters())\
+                           + [("r_mean", model.r_mean)] + [("r_log_var", model.r_log_var)]
 
     args.bert_lr = args.bert_lr if args.bert_lr else args.learning_rate
     args.classifier_lr = args.classifier_lr if args.classifier_lr else args.learning_rate
     args.crf_lr = args.crf_lr if args.crf_lr else args.learning_rate
+
     optimizer_grouped_parameters = [
         {"params": [p for n, p in bert_parameters if not any(nd in n for nd in no_decay)],
          "weight_decay": args.weight_decay,
@@ -202,61 +201,62 @@ def prepare_optimizer_scheduler(args, model, training_steps):
     return optimizer, scheduler
 
 
-def load_and_cache_examples(args, tokenizer, labels, pad_token_label_id, mode, data_dir=None):
+def load_and_cache_examples(args, mode, data_dir=None):
     data_dir = args.data_dir if data_dir is None else data_dir
-    # generate random str
-    chars = string.ascii_letters + string.digits
-    random_str = ''.join([random.choice(chars) for i in range(6)])
-    # Load data features from cache or dataset file
-    cached_features_file = os.path.join(
-        data_dir,
-        "cached_{}_{}_{}_{}".format(
-            mode, list(filter(None, args.model_name_or_path.split("/"))).pop(), str(args.max_seq_length), random_str
-        ),
+    # ***********create online features*****************
+    logger.info("Creating features from dataset file at %s", data_dir)
+    # 读文件
+    examples = read_examples_from_file(data_dir, mode)
+    # 将输入转为模型输入数值
+
+    return examples
+
+
+def get_dataset(args, examples, tokenizer, labels, pad_token_label_id, trans_examples=None):
+    features_tensors = get_feature_tensor(args, examples, tokenizer, labels, pad_token_label_id)
+
+    if trans_examples is not None:
+        trans_features_tensors = get_feature_tensor(args, trans_examples, tokenizer, labels, pad_token_label_id)
+        features_tensors = features_tensors + trans_features_tensors
+
+    return TensorDataset(*features_tensors)
+
+
+def get_feature_tensor(args, examples, tokenizer, labels, pad_token_label_id):
+    features = convert_examples_to_features(
+        examples,
+        labels,
+        args.max_seq_length,
+        tokenizer,
+        cls_token_at_end=bool(args.model_type in ["xlnet"]),
+        # xlnet has a cls token at the end
+        cls_token=tokenizer.cls_token,
+        cls_token_segment_id=2 if args.model_type in ["xlnet"] else 0,
+        sep_token=tokenizer.sep_token,
+        sep_token_extra=bool(args.model_type in ["roberta"]),
+        # roberta uses an extra separator b/w pairs of sentences,
+        # cf. github.com/pytorch/fairseq/commit/1684e166e3da03f5b600dbb7855cb98ddfcd0805
+        pad_on_left=bool(args.model_type in ["xlnet"]),
+        # pad on the left for xlnet
+        pad_token=tokenizer.pad_token_id,
+        pad_token_segment_id=tokenizer.pad_token_type_id,
+        pad_token_label_id=pad_token_label_id,
     )
-    if os.path.exists(cached_features_file) and not args.overwrite_cache:
-        logger.info("Loading features from cached file %s", cached_features_file)
-        features = torch.load(cached_features_file)
-    else:
-        logger.info("Creating features from dataset file at %s", data_dir)
-        # 读文件
-        examples = read_examples_from_file(data_dir, mode)
-        # 将输入转为模型输入数值
-        # valid_mask、start_ids、end_ids 的用处？
-        features = convert_examples_to_features(
-            examples,
-            labels,
-            args.max_seq_length,
-            tokenizer,
-            cls_token_at_end=bool(args.model_type in ["xlnet"]),
-            # xlnet has a cls token at the end
-            cls_token=tokenizer.cls_token,
-            cls_token_segment_id=2 if args.model_type in ["xlnet"] else 0,
-            sep_token=tokenizer.sep_token,
-            sep_token_extra=bool(args.model_type in ["roberta"]),
-            # roberta uses an extra separator b/w pairs of sentences,
-            # cf. github.com/pytorch/fairseq/commit/1684e166e3da03f5b600dbb7855cb98ddfcd0805
-            pad_on_left=bool(args.model_type in ["xlnet"]),
-            # pad on the left for xlnet
-            pad_token=tokenizer.pad_token_id,
-            pad_token_segment_id=tokenizer.pad_token_type_id,
-            pad_token_label_id=pad_token_label_id,
-        )
-
-        logger.info("Saving features into cached file %s", cached_features_file)
-        torch.save(features, cached_features_file)
-
     # Convert to Tensors and build dataset
-    all_input_ids = torch.tensor([f.input_ids for f in features], dtype=torch.long)
-    all_input_mask = torch.tensor([f.input_mask for f in features], dtype=torch.long)
-    # valid_mask 有何用处？
-    all_valid_mask = torch.tensor([f.valid_mask for f in features], dtype=torch.long)
-    all_segment_ids = torch.tensor([f.segment_ids for f in features], dtype=torch.long)
-    all_label_ids = torch.tensor([f.label_ids for f in features], dtype=torch.long)
+    all_input_ids = torch.tensor([f.input_ids for f in features],
+                                 dtype=torch.long)
+    all_input_mask = torch.tensor([f.input_mask for f in features],
+                                  dtype=torch.long)
+    # valid_mask 用来mask, subword 的输出
+    all_valid_mask = torch.tensor([f.valid_mask for f in features],
+                                  dtype=torch.long)
+    all_segment_ids = torch.tensor([f.segment_ids for f in features],
+                                   dtype=torch.long)
+    all_label_ids = torch.tensor([f.label_ids for f in features],
+                                 dtype=torch.long)
 
-    dataset = TensorDataset(all_input_ids, all_input_mask, all_valid_mask, all_segment_ids, all_label_ids)
-
-    return dataset
+    return [all_input_ids, all_input_mask, all_valid_mask,
+            all_segment_ids, all_label_ids]
 
 
 def resuming_training(args, train_dataloader):

@@ -1,6 +1,11 @@
 import logging
 import os
 import torch
+import string
+import random
+import copy
+
+from utils.typos import typos
 from utils.utils_metrics import get_entities
 
 logger = logging.getLogger(__name__)
@@ -245,3 +250,121 @@ def get_labels(path):
         return labels
     else:
         return ["O", "B-MISC", "I-MISC", "B-PER", "I-PER", "B-ORG", "I-ORG", "B-LOC", "I-LOC"]
+
+
+def build_neg_samples(
+    origin_samples,
+    total=True,
+    rep_freq=False,
+    mode='typos'
+):
+    """
+    1. 怎么选取被替换实体词（1> 替换部分还是全部替换； 2> 按照频率替换，还是随机选择）
+    2. 怎么选取替换词 （1> ngram; 2> Typos; 3> 随机词表词 4> HotFlip rank ）
+
+    目前为等长替换策略
+
+    """
+    if rep_freq:
+        raise NotImplementedError("Not implement replace frequency entity!")
+
+    if total:
+        if mode == "typos":
+            return [total_rand_typos(x) for x in origin_samples]
+        elif mode == "ngram":
+            return [total_rand_ngram(x) for x in origin_samples]
+        else:
+            raise NotImplementedError("Not support {} mode!".format(mode))
+    else:
+        if mode == "typos":
+            return [part_rand_typos(x) for x in origin_samples]
+        elif mode == "ngram":
+            return [part_rand_ngram(x) for x in origin_samples]
+        else:
+            raise NotImplementedError("Not support {} mode!".format(mode))
+
+
+def total_rand_ngram(example):
+    """
+    实体词全部替换为随机的ngram
+    """
+    new_example = copy.deepcopy(example)
+    entities = list(get_entities(new_example.labels))
+
+    # 默认一个sample只替换一个实体词
+    entity = random.choice(entities)
+    i, j = entity[1:]
+    ngrams = [generate_ngram() for _ in range(i, j+1)]
+    new_example.words = new_example.words[:i] + \
+                        ngrams + \
+                        new_example.words[j+1:]
+
+    assert len(new_example.words) == len(new_example.labels)
+
+    return new_example
+
+
+def total_rand_typos(example):
+    """
+    实体词全部替换为Typos
+
+    """
+    new_example = copy.deepcopy(example)
+    entities = list(get_entities(new_example.labels))
+
+    if not entities:
+        return copy.deepcopy(example)
+
+    entity = random.choice(entities)
+    i, j = entity[1:]
+    typos_list = []
+
+    for idx in range(i, j + 1):
+        candidate = typos.get_candidates(example.words[idx], n=1)
+        if candidate:
+            candidate = candidate[0]
+        else:
+            candidate = example.words[idx]
+        typos_list.append(candidate)
+
+    new_example.words = new_example.words[:i] +\
+                        typos_list + \
+                        new_example.words[j+1:]
+    assert len(new_example.words) == len(new_example.labels)
+
+    return new_example
+
+
+def part_rand_ngram(example):
+    raise NotImplementedError
+
+
+def part_rand_typos(example):
+    raise NotImplementedError
+
+
+def generate_ngram(seed=42):
+    chars = string.ascii_letters
+    ngram_len = random.randint(3, 10)
+    random_str = ''.join([random.choice(chars) for i in range(ngram_len)])
+
+    return random_str
+
+
+if __name__ == "__main__":
+    examples = [InputExample(1, ["I", "lives", "in", "Shanghai", "Yangpu"], ["O", "O", "O", "B-LOC", "I-LOC"]),
+                InputExample(2, ["China", "contains", "Shanghai", "City"],
+                             ["B-LOC", "O", "B-LOC", "I-LOC"]),
+                InputExample(3, ["Bao", "Rong", "is", "playing", "LOL"],
+                             ["B-PER", "I-PER", "O", "O", "O"])
+                ]
+    # start test
+    for mode in ['typos', "ngram"]:
+        print("#"*50)
+        print(mode)
+        trans_examples = build_neg_samples(examples, mode=mode)
+
+        for example in trans_examples:
+            print("*"*50)
+            print(" ".join(example.words))
+            print(" ".join(example.labels))

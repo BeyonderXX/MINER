@@ -2,6 +2,14 @@ import torch
 
 
 def valid_sequence_output(sequence_output, valid_mask, attention_mask):
+    """
+    如果 word 被 tokenizer 切分， 仅保留第一个词的预测token和其原始label对应
+
+    :param sequence_output:
+    :param valid_mask:
+    :param attention_mask:
+    :return:
+    """
     batch_size, max_len, feat_dim = sequence_output.shape
     valid_output = torch.zeros(batch_size, max_len, feat_dim, dtype=torch.float32,
                                device='cuda' if torch.cuda.is_available() else 'cpu')

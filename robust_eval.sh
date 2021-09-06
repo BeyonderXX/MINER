@@ -45,3 +45,7 @@ nohup python main.py --gpu_id 2 --output_dir /root/RobustNER/out/bert_uncase/bet
 
 nohup python main.py --gpu_id 3 --output_dir /root/RobustNER/out/bert_uncase/beta_5e_6_h500 --hidden_dim 500 --do_train --do_eval --do_predict --do_robustness_eval --beta 5e-6 > bert_beta_5e_6_h500.log 2>&1 &
 nohup python main.py --gpu_id 4 --output_dir /root/RobustNER/out/bert_uncase/beta_5e_6_h756 --hidden_dim 756 --do_train --do_eval --do_predict --do_robustness_eval --beta 5e-6 > bert_beta_5e_6_h756.log 2>&1 &
+
+
+# 第一版entity regularizer实验（gamma 1e-03  total_typos）
+nohup python main.py --gpu_id 4 --output_dir /root/RobustNER/out/bert_uncase/bn_ent_typos_1e_3/ --batch_size 60 --hidden_dim 300 --do_train --do_eval --do_predict --do_robustness_eval --beta 5e-5 > bert_beta_5e_5_h300_ent_typos.log 2>&1 &

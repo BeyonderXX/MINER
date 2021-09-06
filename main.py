@@ -41,8 +41,18 @@ trans_list = ["CrossCategory", "EntityTyposSwap", "OOV", "ToLonger"]
 
 def train(args, model, tokenizer, labels, pad_token_label_id):
     """ Train the model """
-    train_dataset = load_and_cache_examples(args, tokenizer, labels,
-                                            pad_token_label_id, mode="train")
+    train_examples = load_and_cache_examples(args, mode="train")
+
+    # optimize I(x_e;y_e|x!=e)
+    if args.regular_entity:
+        trans_examples = build_neg_samples(train_examples, mode=args.rep_mode)
+        train_dataset = get_dataset(args, trans_examples, tokenizer, labels,
+                                    pad_token_label_id,
+                                    trans_examples=trans_examples)
+    else:
+        train_dataset = get_dataset(args, train_examples, tokenizer, labels,
+                                    pad_token_label_id)
+
     tb_writer = SummaryWriter(args.output_dir)
     train_sampler = RandomSampler(train_dataset)
     train_dataloader = DataLoader(train_dataset,
@@ -69,16 +79,32 @@ def train(args, model, tokenizer, labels, pad_token_label_id):
 
     for _ in train_iterator:
         epoch_iterator = tqdm(train_dataloader, desc="Iteration")
+
         for step, batch in enumerate(epoch_iterator):
             model.train()
             batch = tuple(t.to(args.device) for t in batch)
-            inputs = {"input_ids": batch[0],
-                      "attention_mask": batch[1],
-                      "valid_mask": batch[2],
-                      # RoBERTa don"t use segment_ids
-                      "token_type_ids": batch[3],
-                      "labels": batch[4]
-                      }
+            if args.regular_entity:
+                inputs = {"input_ids": batch[0],
+                          "attention_mask": batch[1],
+                          "valid_mask": batch[2],
+                          "token_type_ids": batch[3],
+                          "labels": batch[4],
+
+                          "trans_input_ids": batch[5],
+                          "trans_attention_mask": batch[6],
+                          "trans_valid_mask": batch[7],
+                          "trans_token_type_ids": batch[8],
+                          "trans_labels": batch[9],
+                          }
+            else:
+                inputs = {"input_ids": batch[0],
+                          "attention_mask": batch[1],
+                          "valid_mask": batch[2],
+                          # RoBERTa don"t use segment_ids
+                          "token_type_ids": batch[3],
+                          "labels": batch[4]
+                          }
+
             outputs = model(**inputs)
             loss = outputs[0]
             loss.backward()
@@ -119,9 +145,10 @@ def train(args, model, tokenizer, labels, pad_token_label_id):
 
 def evaluate(args, model, tokenizer, labels, pad_token_label_id, mode,
              prefix='', data_dir=None):
-    eval_dataset = load_and_cache_examples(args, tokenizer, labels,
-                                           pad_token_label_id,
-                                           mode=mode, data_dir=data_dir)
+    eval_examples = load_and_cache_examples(args, mode=mode, data_dir=data_dir)
+    eval_dataset = get_dataset(args, eval_examples, tokenizer, labels,
+                                pad_token_label_id)
+
     args.eval_batch_size = args.batch_size
     eval_sampler = SequentialSampler(eval_dataset)
     eval_dataloader = DataLoader(eval_dataset,
@@ -198,6 +225,26 @@ def evaluate(args, model, tokenizer, labels, pad_token_label_id, mode,
     return results, preds_list
 
 
+def fast_evaluate(args, ckpt_dir, tokenizer_args, labels, pad_token_label_id,
+                  mode, prefix='', data_dir=None):
+    tokenizer = AutoTokenizer.from_pretrained(ckpt_dir, **tokenizer_args)
+    model = AutoModelForCrfNer.from_pretrained(
+        ckpt_dir,
+        args=args,
+        baseline=args.baseline
+    )
+    model.to(args.device)
+    results, predictions = evaluate(args, model, tokenizer, labels, pad_token_label_id,
+                          mode=mode, prefix=prefix, data_dir=data_dir)
+    output_eval_file = os.path.join(ckpt_dir, "{0}_results.txt".format(mode))
+
+    with open(output_eval_file, "a") as writer:
+        writer.write('***** Predict in {0} {1} dataset *****\n'.format(mode, prefix))
+        writer.write("{} = {}\n".format('report', str(results['report'])))
+
+    return results, predictions
+
+
 # main parameters
 def get_args():
     parser = arg_parse()
@@ -213,8 +260,8 @@ def get_args():
     )
     parser.add_argument(
         "--output_dir",
-        # default="/root/RobustNER/out/bert_uncase/bn_5e_5/",
-        default="/root/RobustNER/out/bert_uncase/debug/",
+        default="/root/RobustNER/out/bert_uncase/bn_ent_reg_1e_3/",
+        # default="/root/RobustNER/out/bert_uncase/debug/",
         type=str,
         help="The output directory where the model predictions and "
              "checkpoints will be written.",
@@ -232,27 +279,48 @@ def get_args():
         help="post encoder out dim"
     )
 
+    # I(X; Z) parameters
+    parser.add_argument("--regular_z", action="store_false",
+                        help="Whether add I(x, z) regular.")
+
     parser.add_argument(
         "--beta", default=5e-5, type=float,
         help="beta params."
     )
 
     parser.add_argument(
+        "--mi_estimator", default='VIB', type=str,
+        help="MI estimator for I(X;Z), support VIB, CLUB"
+    )
+
+    # I(Z; Y) parameters
+    parser.add_argument(
         "--sample_size", default=5, type=int,
         help="sample num from p(z|x)"
     )
 
-    # whether regular entity word
-    parser.add_argument(
-        "--gama", default=5e-5, type=float,
-        help="gama params."
-    )
-
+    # I(X_i ; Z_i | Z_(j!=i))
     parser.add_argument(
         "--regular_entity", action="store_false",
         help="whether add entity regular item."
     )
 
+    parser.add_argument(
+        "--gama", default=1e-3, type=float,
+        help="gama params."
+    )
+
+    parser.add_argument(
+        "--entity_mi_estimator", default='vCLUB', type=str,
+        help="MI estimator for entity and its encoding representation"
+    )
+
+    parser.add_argument(
+        "--rep_mode", default="typos",
+        help="which strategy to replace entity, support typos and ngram now."
+    )
+
+    # training parameters
     parser.add_argument("--batch_size", default=64, type=int,
                         help="Batch size per GPU/CPU for training.")
 
@@ -272,26 +340,6 @@ def get_args():
     )
 
     return arg_process(parser.parse_args())
-
-
-def fast_evaluate(args, ckpt_dir, tokenizer_args, labels, pad_token_label_id,
-                  mode, prefix='', data_dir=None):
-    tokenizer = AutoTokenizer.from_pretrained(ckpt_dir, **tokenizer_args)
-    model = AutoModelForCrfNer.from_pretrained(
-        ckpt_dir,
-        args=args,
-        baseline=args.baseline
-    )
-    model.to(args.device)
-    results, predictions = evaluate(args, model, tokenizer, labels, pad_token_label_id,
-                          mode=mode, prefix=prefix, data_dir=data_dir)
-    output_eval_file = os.path.join(ckpt_dir, "{0}_results.txt".format(mode))
-
-    with open(output_eval_file, "a") as writer:
-        writer.write('***** Predict in {0} {1} dataset *****\n'.format(mode, prefix))
-        writer.write("{} = {}\n".format('report', str(results['report'])))
-
-    return results, predictions
 
 
 def main():

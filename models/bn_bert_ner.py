@@ -1,60 +1,7 @@
 from torch import nn
 import torch
 from .bert_ner import BertPreTrainedModel, BertModel, CRF, valid_sequence_output
-
-SMALL = 1e-08
-
-
-class PostEncoder(nn.Module):
-    """
-    base encoder 设置为 BERT
-    """
-    def __init__(
-        self,
-        device,
-        embedding_dim=768,
-        hidden_dim=500,
-        tag_dim=128
-    ):
-        super(PostEncoder, self).__init__()
-
-        # params
-        self.device = device
-        self.hidden_dim = hidden_dim
-        self.activations = {'tanh': torch.tanh, 'sigmoid': torch.sigmoid,
-                            'relu': torch.relu}
-        self.activation = self.activations['tanh']
-        interm_layer_size = (embedding_dim + hidden_dim) // 2
-
-        # additional encoder
-        self.linear_layer = nn.Linear(embedding_dim, interm_layer_size)
-        self.linear_layer3 = nn.Linear(interm_layer_size, hidden_dim)
-
-        # ============= Covariance matrix & Mean vector ================
-        self.hidden2mean = nn.Linear(hidden_dim, tag_dim)
-        self.hidden2std = nn.Linear(hidden_dim, tag_dim)
-
-    def forward_sent_batch(self, embeds):
-
-        temps = self.activation(self.linear_layer(embeds))
-        temps = self.activation(self.linear_layer3(temps))
-        mean = self.hidden2mean(temps)  # bsz, seqlen, dim
-        std = self.hidden2std(temps)  # bsz, seqlen, dim
-        cov = std * std + SMALL
-        return mean, cov
-
-    def get_sample_from_param_batch(self, mean, cov, sample_size):
-        bsz, seqlen, tag_dim = mean.shape
-        z = torch.randn(bsz, sample_size, seqlen, tag_dim).to(self.device)
-
-        z = z * torch.sqrt(cov).unsqueeze(1).expand(-1, sample_size, -1, -1) + \
-            mean.unsqueeze(1).expand(-1, sample_size, -1, -1)
-
-        return z.view(-1, seqlen, tag_dim)
-
-    def get_statistics_batch(self, elmo_embeds):
-        mean, cov = self.forward_sent_batch(elmo_embeds)
-        return mean, cov
+from .MI_estimators import CLUB, vCLUB, VIB, kl_div
 
 
 class BertCrfWithBN(BertPreTrainedModel):
@@ -68,109 +15,96 @@ class BertCrfWithBN(BertPreTrainedModel):
         self.bert = BertModel(config)
         self.dropout = nn.Dropout(config.hidden_dropout_prob)
 
-        self.post_encoder = PostEncoder(
-            args.device,
-            embedding_dim=config.hidden_size,
-            hidden_dim=(args.hidden_dim+config.hidden_size)//2,
-            tag_dim=args.hidden_dim
-        )
-
-        self.sample_size = args.sample_size
+        # post encoder 部分
+        self.beta = args.beta
         self.regular_z = args.regular_z
 
-        # entity regular_z
-        self.gama = args.get("gama", 1e-5)
-        self.regular_entity = args.get("regular_entity", False)
+        if args.mi_estimator is 'VIB':
+            MI_estimator = VIB
+        elif args.mi_estimator is 'CLUB':
+            # TODO, support
+            MI_estimator = CLUB
+        else:
+            raise ValueError('Do not support {} estimator!'.format(args.mi_estimator))
 
-        # decoder 部分
+        self.post_encoder = MI_estimator(
+            embedding_dim=config.hidden_size,
+            hidden_dim=(args.hidden_dim + config.hidden_size) // 2,
+            tag_dim=args.hidden_dim,
+            device=args.device
+        )
+        # r(t)
+        self.r_mean = nn.Parameter(torch.randn(args.max_seq_length, args.hidden_dim))
+        self.r_log_var = nn.Parameter(torch.randn(args.max_seq_length, args.hidden_dim))
+
+        # I(Z; Y) 部分（decoder部分）
+        self.sample_size = args.sample_size
         self.classifier = nn.Linear(args.hidden_dim, config.num_labels)
         self.decoder = CRF(num_tags=config.num_labels, batch_first=True)
-        # self.init_weights()
 
-        # r(t)
-        self.beta = args.beta
-        self.r_mean = nn.Parameter(torch.randn(args.max_seq_length, args.hidden_dim))
-        self.r_std = nn.Parameter(torch.randn(args.max_seq_length, args.hidden_dim))
+        # I(Z_i;X_i | X_(j!=i))
+        self.regular_entity = args.regular_entity
+        self.gama = args.gama
+        self.entity_regularizer = vCLUB()
 
         self.init_weights()
-
-    def kl_div(self, param1, param2):
-        """
-        Calculates the KL divergence between a categorical distribution and a
-        uniform categorical distribution.
-        Parameters
-        ----------
-        alpha : torch.Tensor
-            Parameters of the categorical or gumbel-softmax distribution.
-            Shape (N, D)
-        """
-        mean1, cov1 = param1
-        mean2, cov2 = param2
-        bsz, seqlen, tag_dim = mean1.shape
-        var_len = tag_dim * seqlen
-
-        cov2_inv = 1 / cov2
-        mean_diff = mean1 - mean2
-
-        mean_diff = mean_diff.view(bsz, -1)
-        cov1 = cov1.view(bsz, -1)
-        cov2 = cov2.view(bsz, -1)
-        cov2_inv = cov2_inv.view(bsz, -1)
-
-        temp = (mean_diff * cov2_inv).view(bsz, 1, -1)
-        KL = 0.5 * (
-                torch.sum(torch.log(cov2), dim=1)
-                - torch.sum(torch.log(cov1), dim=1)
-                - var_len
-                + torch.sum(cov2_inv * cov1, dim=1)
-                + torch.bmm(temp, mean_diff.view(bsz, -1, 1)).view(bsz)
-        )
-
-        return KL
 
     def forward(
         self,
         input_ids,
         attention_mask=None,
         token_type_ids=None,
+        valid_mask=None,
+        labels=None,
         position_ids=None,
         head_mask=None,
         inputs_embeds=None,
-        valid_mask=None,
-        labels=None,
+        # separate
+        trans_input_ids=None,
+        trans_attention_mask=None,
+        trans_valid_mask=None,
+        trans_token_type_ids=None,
+        trans_labels=None,
+        trans_position_ids=None,
+        trans_head_mask=None,
+        trans_inputs_embeds=None,
         decode=False
     ):
         """
         默认有 labels 为 train, 无 labels 为 test
         """
-        # encoder
-        outputs = self.bert(
-            input_ids=input_ids,
-            attention_mask=attention_mask,
-            token_type_ids=token_type_ids,
-            position_ids=position_ids,
-            head_mask=head_mask,
-            inputs_embeds=inputs_embeds
-        )
-        sequence_output = outputs[0]
-        # 把 padding 部分置零
-        sequence_output, attention_mask = valid_sequence_output(
-            sequence_output,
-            valid_mask,
-            attention_mask
+        origin_out = self.encoding(
+            input_ids,
+            attention_mask,
+            token_type_ids,
+            position_ids,
+            head_mask,
+            inputs_embeds,
+            valid_mask
         )
 
-        sequence_output = self.dropout(sequence_output)
+        if trans_input_ids is not None:
+            trans_out = self.encoding(
+                trans_input_ids,
+                trans_attention_mask,
+                trans_token_type_ids,
+                trans_position_ids,
+                trans_head_mask,
+                inputs_embeds,
+                trans_valid_mask
+            )
+            # upper bound of entity
+            entity_mi = self.entity_regularizer.update(origin_out, trans_out)
 
         # p(t|x) 基于采样得到的 mean 和 cov (假设符合高斯分布)
-        mean, cov = self.post_encoder.get_statistics_batch(sequence_output)
-        bsz, seqlen, _ = sequence_output.shape
+        mean, log_var = self.post_encoder.get_mu_logvar(origin_out)
+        bsz, seqlen, _ = mean.shape
 
         # train sample by IID, test by argmax
         # (bsz * sample_size, seq_len, tag_dim)
         if labels is not None:
             t = self.post_encoder.get_sample_from_param_batch(
-                mean, cov, self.sample_size
+                mean, log_var, self.sample_size
             )
             # labels expand
             labels = labels.unsqueeze(1).repeat(1, self.sample_size, 1) \
@@ -202,13 +136,51 @@ class BertCrfWithBN(BertPreTrainedModel):
 
             if self.regular_z:
                 mean_r = self.r_mean[:seqlen].unsqueeze(0).expand(bsz, -1, -1)
-                std_r = self.r_std[:seqlen].unsqueeze(0).expand(bsz, -1, -1)
-                cov_r = std_r * std_r + SMALL
+                log_var_r = self.r_log_var[:seqlen].unsqueeze(0).expand(bsz, -1, -1)
 
                 # second item loss
-                kl_div = self.kl_div((mean, cov), (mean_r, cov_r))
-                nlpy_t += self.beta * kl_div.mean()
+                kl = kl_div((mean, log_var), (mean_r, log_var_r))
+                nlpy_t += self.beta * kl.mean()
+
+            if self.regular_entity:
+                nlpy_t += self.gama * entity_mi
 
             outputs = (nlpy_t,) + outputs
 
         return outputs  # (loss), scores
+
+    def encoding(
+        self,
+        input_ids,
+        attention_mask,
+        token_type_ids,
+        position_ids,
+        head_mask,
+        inputs_embeds,
+        valid_mask
+    ):
+        # encoder
+        outputs = self.bert(
+            input_ids=input_ids,
+            attention_mask=attention_mask,
+            token_type_ids=token_type_ids,
+            position_ids=position_ids,
+            head_mask=head_mask,
+            inputs_embeds=inputs_embeds
+        )
+        sequence_output = outputs[0]
+        # 把 padding 部分置零
+        sequence_output, attention_mask = valid_sequence_output(
+            sequence_output,
+            valid_mask,
+            attention_mask
+        )
+        sequence_output = self.dropout(sequence_output)
+
+        return sequence_output
+
+    def post_encoding(self, sequence_output):
+        # p(t|x) 基于采样得到的 mean 和 cov (假设符合高斯分布)
+        mean, cov = self.post_encoder.get_statistics_batch(sequence_output)
+
+        return mean, cov
