@@ -104,13 +104,11 @@ def train(args, model, tokenizer, labels, pad_token_label_id):
                           "token_type_ids": batch[3],
                           "labels": batch[4]
                           }
-
             outputs = model(**inputs)
             loss = outputs[0]
             loss.backward()
 
             fitlog.add_loss(loss.tolist(), name="Loss", step=global_step)
-
             tr_loss += loss.item()
             epoch_iterator.set_description('Loss: {}'.format(round(loss.item(), 6)))
             # clip gradients
@@ -136,7 +134,9 @@ def train(args, model, tokenizer, labels, pad_token_label_id):
                     if best_score < results['f1']:
                         best_score = results['f1']
                         output_dir = os.path.join(args.output_dir, "best_checkpoint")
-                        model_save(args, output_dir, model, tokenizer)
+                    else:
+                        output_dir = args.output_dir
+                    model_save(args, output_dir, model, tokenizer)
 
     tb_writer.close()
 
@@ -260,18 +260,18 @@ def get_args():
     )
     parser.add_argument(
         "--output_dir",
-        default="/root/RobustNER/out/bert_uncase/bn_ent_reg_1e_3/",
-        # default="/root/RobustNER/out/bert_uncase/debug/",
+        # default="/root/RobustNER/out/bert_uncase/bn_ent_reg_1e_3/",
+        default="/root/RobustNER/out/bert_uncase/debug/",
         type=str,
         help="The output directory where the model predictions and "
              "checkpoints will be written.",
     )
     # Other parameters
-    parser.add_argument("--gpu_id", default=3, type=int,
+    parser.add_argument("--gpu_id", default=1, type=int,
                         help="GPU number id")
 
     parser.add_argument(
-        "--epoch", default=50, type=float,
+        "--epoch", default=35, type=float,
         help="Total number of training epochs to perform."
     )
     parser.add_argument(
@@ -282,6 +282,9 @@ def get_args():
     # I(X; Z) parameters
     parser.add_argument("--regular_z", action="store_false",
                         help="Whether add I(x, z) regular.")
+
+    parser.add_argument("--regular_norm", action="store_false",
+                        help="Whether add I(z|x, N) regular.")
 
     parser.add_argument(
         "--beta", default=5e-5, type=float,
@@ -383,6 +386,7 @@ def main():
 
     # 可以只加载 预训练 模型, 也可以加载全部保存的参数
     model = AutoModelForCrfNer.from_pretrained(
+        # args.output_dir,
         args.model_name_or_path,
         config=config,
         cache_dir=None,
@@ -400,9 +404,6 @@ def main():
     if args.do_train:
         global_step, tr_loss = train(args, model, tokenizer, labels, pad_token_label_id)
         logger.info(" global_step = %s, average loss = %s", global_step, tr_loss)
-        # Saving final-practices: if you use defaults names for the model,
-        # you can reload it using from_pretrained()
-        model_save(args, args.output_dir, model, tokenizer)
 
     best_ckpt_dir = os.path.join(args.output_dir, "best_checkpoint")
 
@@ -432,7 +433,7 @@ def main():
         predictions_save(test_file, predictions, output_test_predictions)
 
     if args.do_robustness_eval:
-        base_dir = '/root/RobustNER/data/conll2003/'
+        base_dir = '/root/RobustNER/data/conll2003/v0/'
         # eval best checkpoint
         for trans in trans_list:
             logger.info(

@@ -1,11 +1,11 @@
 import numpy as np
 
+import math
 import torch
 import torch.nn as nn
 from abc import ABC, abstractmethod
 
 # TODO， hidden_size 调整
-lowersize = 40
 hiddensize = 8
 SMALL = 1e-08
 
@@ -30,14 +30,18 @@ class UpperWithPosterior(UpperBound):
     ):
         super(UpperWithPosterior, self).__init__()
         self.device = device
+        # u
         self.p_mu = nn.Sequential(nn.Linear(embedding_dim, hidden_dim),
-                                  nn.ReLU(),
+                                  # nn.ReLU(),
+                                  nn.Tanh(),
                                   nn.Linear(hidden_dim, tag_dim))
-
+        # log(σ**2)
         self.p_log_var = nn.Sequential(nn.Linear(embedding_dim, hidden_dim),
-                                       nn.ReLU(),
+                                       nn.Tanh(),
+                                       # nn.ReLU(),
                                        nn.Linear(hidden_dim, tag_dim),
-                                       nn.Tanh())
+                                       # nn.Tanh()
+                                       )
 
     # 返回 u , log(σ**2)
     def get_mu_logvar(self, embeds):
@@ -47,22 +51,25 @@ class UpperWithPosterior(UpperBound):
         return mean, log_var
 
     def loglikeli(self, y_samples, mu, log_var):
-
-        return (-(mu - y_samples) ** 2 / log_var.exp() - log_var).sum(dim=1).mean(dim=0)
+        # [batch, seq_len, dim]
+        return (-0.5 * (mu - y_samples) ** 2 / log_var.exp()
+                + log_var
+                + torch.log(math.pi)
+                ).sum(dim=1).mean(dim=0)
 
     # 从正态分布中 sample 样本
     def get_sample_from_param_batch(self, mean, log_var, sample_size):
         bsz, seqlen, tag_dim = mean.shape
         z = torch.randn(bsz, sample_size, seqlen, tag_dim).to(self.device)
 
-        z = z * torch.exp(log_var).unsqueeze(1).expand(-1, sample_size, -1, -1) + \
+        z = z * torch.exp(0.5 * log_var).unsqueeze(1).expand(-1, sample_size, -1, -1) + \
             mean.unsqueeze(1).expand(-1, sample_size, -1, -1)
 
+        # [batch * sample_size, seq_len, tag_dim]
         return z.view(-1, seqlen, tag_dim)
 
     @abstractmethod
     def update(self, y_samples):
-
         raise NotImplementedError
 
 
@@ -70,7 +77,7 @@ class VIB(UpperWithPosterior):
     """
     Deep Variational Information Bottleneck
     """
-
+    # TODO
     # 表示该高斯分布与 N（0，1）之间的KL散度
     def update(self, x_samples):  # [nsample, 1]
         mu, logvar = self.get_mu_logvar(x_samples)
@@ -132,6 +139,7 @@ class vCLUB(UpperBound):
         positive = torch.zeros_like(y_samples)
         #
         negative = - (y_samples - y_n_samples) ** 2 / 2.
+        # TODO mean 分母为 seq_len*batch, 最后数值过小
         upper_bound = (positive.sum(dim=-1) - negative.sum(dim=-1)).mean()
         # return upper_bound/2.
         return upper_bound
@@ -176,12 +184,9 @@ def kl_div(param1, param2):
     """
     Calculates the KL divergence between a categorical distribution and a
     uniform categorical distribution.
-    Parameters
-    ----------
-    alpha : torch.Tensor
-        Parameters of the categorical or gumbel-softmax distribution.
-        Shape (N, D)
+
     """
+    # u, log(std**2)
     mean1, log_cov1 = param1
     mean2, log_cov2 = param2
     cov1 = log_cov1.exp()
@@ -207,3 +212,16 @@ def kl_div(param1, param2):
     )
 
     return KL
+
+
+def kl_norm(mu, log_var):
+    """
+
+    :param mu: u
+    :param log_var: log(std**2)
+
+    :return:
+        D_kl(N(u, std**2), N(0, 1))
+    """
+
+    return -0.5 * torch.sum(1 + log_var - mu ** 2 - log_var.exp(), dim=1).mean()

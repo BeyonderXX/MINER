@@ -200,7 +200,7 @@ def convert_examples_to_features(
         assert len(end_ids) == max_seq_length
         assert len(valid_mask) == max_seq_length
 
-        if ex_index < 5:
+        if ex_index < 1:
             logger.info("*** Example ***")
             logger.info("guid: %s", example.guid)
             logger.info("tokens: %s", " ".join([str(x) for x in tokens]))
@@ -290,6 +290,9 @@ def total_rand_ngram(example):
     """
     new_example = copy.deepcopy(example)
     entities = list(get_entities(new_example.labels))
+
+    if not entities:
+        return copy.deepcopy(example)
 
     # 默认一个sample只替换一个实体词
     entity = random.choice(entities)

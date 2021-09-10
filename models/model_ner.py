@@ -58,14 +58,17 @@ class AutoModelForCrfNer:
         #         return model_class.from_pretrained(pretrained_model_name_or_path, *model_args, config=config, **kwargs)
 
         # default BertCrfWithBN
-        if baseline:
-            return BertCrfForNer.from_pretrained(pretrained_model_name_or_path,
-                                                 *model_args, config=config,
-                                                 **kwargs)
-        else:
-            return BertCrfWithBN.from_pretrained(pretrained_model_name_or_path,
-                                                 *model_args, config=config,
-                                                 **kwargs)
+        # if baseline:
+        #     return BertCrfForNer.from_pretrained(pretrained_model_name_or_path,
+        #                                          *model_args, config=config,
+        #                                          **kwargs)
+        # else:
+        #     return BertCrfWithBN.from_pretrained(pretrained_model_name_or_path,
+        #                                          *model_args, config=config,
+        #                                          **kwargs)
+        return BertCrfWithBN.from_pretrained(pretrained_model_name_or_path,
+                                             *model_args, config=config,
+                                             **kwargs)
 
         # raise ValueError(
         #     "Unrecognized configuration class {} for this kind of AutoModel: {}.\n"
