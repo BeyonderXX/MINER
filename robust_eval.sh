@@ -92,3 +92,8 @@ nohup python main.py --gpu_id 4 --output_dir /root/RobustNER/out/bn_norm_ent_reg
 nohup python main.py --gpu_id 5 --output_dir /root/RobustNER/out/bn_norm_ent_reg_sample5_gama_1e_1/ --epoch 40 --gama 1e-1 --regular_z --batch_size 32 --do_train --do_eval --do_predict --do_robustness_eval > bn_norm_ent_reg_sample5_gama_1e_1.log 2>&1 &
 nohup python main.py --gpu_id 6 --output_dir /root/RobustNER/out/bn_norm_ent_reg_sample5_gama_1/ --epoch 40 --gama 1 --regular_z --batch_size 32 --do_train --do_eval --do_predict --do_robustness_eval > bn_norm_ent_reg_sample5_gama_1.log 2>&1 &
 nohup python main.py --gpu_id 7 --output_dir /root/RobustNER/out/bn_norm_ent_reg_sample5_gama_5/ --epoch 40 --gama 5 --regular_z --batch_size 32 --do_train --do_eval --do_predict --do_robustness_eval > bn_norm_ent_reg_sample5_gama_5.log 2>&1 &
+
+# 加入 pmi 过滤，epoch negative sample构建策略
+nohup python main.py --gpu_id 1 --output_dir /root/RobustNER/out/bn_norm_ent_reg_sample5_gama_5/ --epoch 40 --gama 5 --regular_z --batch_size 32 --do_train --do_eval --do_predict --do_robustness_eval > bn_norm_ent_reg_sample5_gama_5.log 2>&1 &
+
+--rep_total --pmi_preserve 0.2 --rep_mode ngram --regular_z --batch_size 32 --do_train --do_eval --do_predict --do_robustness_eval

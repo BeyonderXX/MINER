@@ -42,35 +42,21 @@ trans_list = ["CrossCategory", "EntityTyposSwap", "OOV", "ToLonger"]
 def train(args, model, tokenizer, labels, pad_token_label_id):
     """ Train the model """
     train_examples = load_and_cache_examples(args, mode="train")
-
-    # optimize I(x_e;y_e|x!=e)
-    if args.regular_entity:
-        trans_examples = build_neg_samples(train_examples, mode=args.rep_mode)
-        train_dataset = get_dataset(args, trans_examples, tokenizer, labels,
-                                    pad_token_label_id,
-                                    trans_examples=trans_examples)
-    else:
-        train_dataset = get_dataset(args, train_examples, tokenizer, labels,
-                                    pad_token_label_id)
-
     tb_writer = SummaryWriter(args.output_dir)
-    train_sampler = RandomSampler(train_dataset)
-    train_dataloader = DataLoader(train_dataset,
-                                  sampler=train_sampler,
-                                  batch_size=args.batch_size,
-                                  collate_fn=collate_fn)
-    training_steps = len(train_dataloader) * args.epoch
+
+    training_steps = (len(train_examples) - 1 / args.epoch + 1) * args.epoch
 
     # Prepare optimizer and schedule (linear warmup and decay)
     optimizer, scheduler = prepare_optimizer_scheduler(args, model, training_steps)
 
     # Train!
     logger.info("***** Running training *****")
-    logger.info("  Num examples = %d", len(train_dataset))
+    logger.info("  Num examples = %d", len(train_examples))
     logger.info("  Num Epochs = %d", args.epoch)
     logger.info("  Total train batch size = %d", args.batch_size)
     logger.info("  Total optimization steps = %d", training_steps)
 
+    train_dataset = None
     global_step = 0
     best_score = 0.0
     tr_loss, logging_loss = 0.0, 0.0
@@ -78,6 +64,29 @@ def train(args, model, tokenizer, labels, pad_token_label_id):
     train_iterator = trange(int(args.epoch), desc="Epoch")
 
     for _ in train_iterator:
+        # optimize I(x_e;y_e|x!=e)
+        if args.regular_entity:
+            # 每个 epoch 动态构建
+            trans_examples = build_neg_samples(train_examples,
+                                               mode=args.rep_mode,
+                                               total=args.rep_total,
+                                               tokenizer=tokenizer,
+                                               pmi_path=args.pmi_json,
+                                               pmi_preserve=args.pmi_preserve
+                                               )
+            train_dataset = get_dataset(args, trans_examples, tokenizer, labels,
+                                        pad_token_label_id,
+                                        trans_examples=trans_examples)
+        else:
+            if not train_dataset:
+                train_dataset = get_dataset(args, train_examples, tokenizer,
+                                            labels, pad_token_label_id)
+
+        train_sampler = RandomSampler(train_dataset)
+        train_dataloader = DataLoader(train_dataset,
+                                      sampler=train_sampler,
+                                      batch_size=args.batch_size,
+                                      collate_fn=collate_fn)
         epoch_iterator = tqdm(train_dataloader, desc="Iteration")
 
         for step, batch in enumerate(epoch_iterator):
@@ -234,8 +243,9 @@ def fast_evaluate(args, ckpt_dir, tokenizer_args, labels, pad_token_label_id,
         baseline=args.baseline
     )
     model.to(args.device)
-    results, predictions = evaluate(args, model, tokenizer, labels, pad_token_label_id,
-                          mode=mode, prefix=prefix, data_dir=data_dir)
+    results, predictions = evaluate(args, model, tokenizer, labels,
+                                    pad_token_label_id, mode=mode,
+                                    prefix=prefix, data_dir=data_dir)
     output_eval_file = os.path.join(ckpt_dir, "{0}_results.txt".format(mode))
 
     with open(output_eval_file, "a") as writer:
@@ -252,8 +262,8 @@ def get_args():
     # Required parameters
     parser.add_argument(
         "--data_dir",
-        default="/root/RobustNER/data/conll2003/origin/",
-        # default="/root/RobustNER/data/debug/",
+        # default="/root/RobustNER/data/conll2003/origin/",
+        default="/root/RobustNER/data/debug/",
         type=str,
         help="The input data dir. Should contain the training files for the "
              "CoNLL-2003 NER task.",
@@ -318,9 +328,21 @@ def get_args():
         help="MI estimator for entity and its encoding representation"
     )
 
+    # negative sample build mode
     parser.add_argument(
         "--rep_mode", default="typos",
         help="which strategy to replace entity, support typos and ngram now."
+    )
+    parser.add_argument(
+        "--rep_total", action="store_false",
+        help="whether replace full entity token or its subword."
+    )
+    parser.add_argument(
+        "--pmi_json", default='/root/RobustNER/data/conll2003/pmi.json'
+    )
+    parser.add_argument(
+        "--pmi_preserve", default=0.2, type=float,
+        help="what extent of PMI ranking subword preserve."
     )
 
     # training parameters
@@ -390,8 +412,7 @@ def main():
         args.model_name_or_path,
         config=config,
         cache_dir=None,
-        args=args,
-        baseline=args.baseline
+        args=args
     )
 
     model.to(args.device)

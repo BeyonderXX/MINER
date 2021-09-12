@@ -45,8 +45,7 @@ class AutoModelForCrfNer:
         )
 
     @classmethod
-    def from_pretrained(cls, pretrained_model_name_or_path, *model_args,
-                        baseline=False, **kwargs):
+    def from_pretrained(cls, pretrained_model_name_or_path, *model_args, **kwargs):
         config = kwargs.pop("config", None)
         if not isinstance(config, PretrainedConfig):
             config = AutoConfig.from_pretrained(pretrained_model_name_or_path, **kwargs)

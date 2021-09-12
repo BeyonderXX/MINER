@@ -4,6 +4,7 @@ import torch
 import string
 import random
 import copy
+import json
 
 from utils.typos import typos
 from utils.utils_metrics import get_entities
@@ -256,7 +257,10 @@ def build_neg_samples(
     origin_samples,
     total=True,
     rep_freq=False,
-    mode='typos'
+    mode='typos',
+    tokenizer=None,
+    pmi_path=None,
+    pmi_preserve=0.1
 ):
     """
     1. 怎么选取被替换实体词（1> 替换部分还是全部替换； 2> 按照频率替换，还是随机选择）
@@ -276,10 +280,13 @@ def build_neg_samples(
         else:
             raise NotImplementedError("Not support {} mode!".format(mode))
     else:
+        assert pmi_path is not None
+        pmi_json = json.load(open(pmi_path, "r+", encoding='utf-8'))
+        pmi_filter = {k: v[:int(len(v)*pmi_preserve)] for k, v in pmi_json.items()}
         if mode == "typos":
-            return [part_rand_typos(x) for x in origin_samples]
+            return [part_rand_typos(x, tokenizer, pmi_filter) for x in origin_samples]
         elif mode == "ngram":
-            return [part_rand_ngram(x) for x in origin_samples]
+            return [part_rand_ngram(x, tokenizer, pmi_filter) for x in origin_samples]
         else:
             raise NotImplementedError("Not support {} mode!".format(mode))
 
@@ -338,12 +345,100 @@ def total_rand_typos(example):
     return new_example
 
 
-def part_rand_ngram(example):
-    raise NotImplementedError
+def part_rand_ngram(example, tokenizer, PMI_filter):
+    """
+    只用 ngram 替换 PMI 值低的 subword
+    :param example:
+    :param tokenizer:
+    :return:
+    """
+    new_example = copy.deepcopy(example)
+    entities = list(get_entities(new_example.labels))
+
+    if not entities:
+        return copy.deepcopy(example)
+
+    # 默认一个sample只替换一个实体词
+    entity = random.choice(entities)
+    i, j = entity[1:]
+    new_words = []
+
+    for token in new_example.words[i: j+1]:
+        subwords = tokenizer.tokenize(token)
+        new_subwords = []
+
+        for subword in subwords:
+            if subword in PMI_filter[entity[0]]:
+                new_subwords.append(subword)
+            else:
+                # 判断 ##
+                new_subword = generate_ngram()
+                if subword[:2] == '##':
+                    new_subword = '##' + new_subword
+                new_subwords.append(new_subword)
+        new_words.append(reverse_BERT_tokenize(new_subwords))
+
+    new_example.words = new_example.words[:i] + \
+                        new_words + \
+                        new_example.words[j+1:]
+
+    assert len(new_example.words) == len(new_example.labels)
+
+    return new_example
 
 
-def part_rand_typos(example):
-    raise NotImplementedError
+def part_rand_typos(example, tokenizer, PMI_filter):
+    """
+    只向 PMI 值低的 subword 中插入 typos
+    :param example:
+    :param tokenizer:
+    :return:
+    """
+    new_example = copy.deepcopy(example)
+    entities = list(get_entities(new_example.labels))
+
+    if not entities:
+        return copy.deepcopy(example)
+
+    # 默认一个sample只替换一个实体词
+    entity = random.choice(entities)
+    i, j = entity[1:]
+    new_words = []
+
+    for token in new_example.words[i, j+1]:
+        subwords = tokenizer.tokenize(token)
+        new_subwords = []
+
+        for subword in subwords:
+            if subword in PMI_filter[entity[0]]:
+                new_subwords.append(subword)
+            else:
+                # 判断 ##
+                sub_wo_sig = subword[2:] if '##' == subword[:2] else subword
+                new_subword = typos.get_candidates(sub_wo_sig, n=1)
+                if subword[:2] == '##':
+                    new_subword = '##' + new_subword
+                new_subwords.append(new_subword)
+        new_words.append(reverse_BERT_tokenize(new_subwords))
+
+    assert(len(new_words) == j-i+1)
+    new_example.words = new_example.words[:i] + \
+                        new_words + \
+                        new_example.words[j+1:]
+
+    assert len(new_example.words) == len(new_example.labels)
+
+    return new_example
+
+
+def reverse_BERT_tokenize(segs):
+    """
+    将BERT对单个词的tokenize结果还原
+    :param segs:
+    :return:
+    """
+    text = ' '.join([x for x in segs])
+    return text.replace(' ##', '')
 
 
 def generate_ngram(seed=42):
