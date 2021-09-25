@@ -164,8 +164,27 @@ def load_tokenizer(tokenizer_path):
         tokenizer_path,
         cache_dir=None
     )
+    # x = ["abcdeengineroadsubwordaaauniversityoverrly",
+    # "conll2003origindir", "FudanUniversity"]
+    #
+    # for word in x:
+    #     print(tokenizer.tokenize(word))
 
     return tokenizer
+
+
+def count_len_subword(pmi_json):
+    len_dic = {}
+    from prettyprinter import cpprint
+    for type in pmi_json:
+        type_len_dic = {}
+        for subword in pmi_json[type]:
+            subword = subword[0].replace('##', '')
+            type_len_dic[len(subword)] = type_len_dic.get(len(subword), 0) + 1
+
+        len_dic[type] = type_len_dic
+
+    cpprint(len_dic)
 
 
 if __name__ == '__main__':
@@ -173,17 +192,23 @@ if __name__ == '__main__':
     training_file = '../data/conll2003/origin/train.txt'
     entity_out = 'test.txt'
     entity_json = get_entity(training_file, entity_out)
-    # eo = open(entity_out, 'r+', encoding='utf-8')
-    # entity_json = json.load(eo)
-    # eo.close()
+    # # eo = open(entity_out, 'r+', encoding='utf-8')
+    # # entity_json = json.load(eo)
+    # # eo.close()
     pmi_out = 'pmi.txt'
     tokenizer_conf_path = '/root/MODELS/bert-base-uncased/'
     PMI = calculate_PMI(entity_json, tokenizer_conf_path, entity_out)
+    #
+    # ratio = 0.05
+    #
+    # for entity_type in PMI:
+    #     token_pmi = PMI[entity_type]
+    #     cpprint("*"*50)
+    #     cpprint(entity_type)
+    #     cpprint(token_pmi[:int(len(token_pmi)*ratio)])
 
-    ratio = 0.05
 
-    for entity_type in PMI:
-        token_pmi = PMI[entity_type]
-        cpprint("*"*50)
-        cpprint(entity_type)
-        cpprint(token_pmi[:int(len(token_pmi)*ratio)])
+    # calculate length
+    tokenizer_conf_path = '/root/MODELS/bert-base-uncased/'
+    load_tokenizer(tokenizer_conf_path)
+    count_len_subword(PMI)

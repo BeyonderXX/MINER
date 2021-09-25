@@ -152,24 +152,24 @@ def prepare_optimizer_scheduler(args, model, training_steps):
     crf_parameters = model.decoder.named_parameters()
     other_parameters = list(model.classifier.named_parameters()) \
 
+
     if not args.baseline:
         other_parameters = other_parameters \
-                           + list(model.post_encoder.named_parameters()) \
                            + list(model.entity_regularizer.named_parameters())\
                            + [("r_mean", model.r_mean)] + [("r_log_var", model.r_log_var)]
+
+        for i in range(model.layers_num):
+            post_encoder = getattr(model, 'poster_encoder_{}'.format(i))
+            other_parameters += list(post_encoder.named_parameters())
+
+        # 加入 context regular 参数
+        other_parameters += list(model.context_regularizer.named_parameters())
 
     args.bert_lr = args.bert_lr if args.bert_lr else args.learning_rate
     args.classifier_lr = args.classifier_lr if args.classifier_lr else args.learning_rate
     args.crf_lr = args.crf_lr if args.crf_lr else args.learning_rate
 
     optimizer_grouped_parameters = [
-        {"params": [p for n, p in bert_parameters if not any(nd in n for nd in no_decay)],
-         "weight_decay": args.weight_decay,
-         "lr": args.bert_lr},
-        {"params": [p for n, p in bert_parameters if any(nd in n for nd in no_decay)],
-         "weight_decay": 0.0,
-         "lr": args.bert_lr},
-
         {"params": [p for n, p in other_parameters if not any(nd in n for nd in no_decay)],
          "weight_decay": args.weight_decay,
          "lr": args.classifier_lr},
@@ -184,6 +184,22 @@ def prepare_optimizer_scheduler(args, model, training_steps):
          "weight_decay": 0.0,
          "lr": args.crf_lr},
     ]
+
+    # 是否固定模型参数
+    if args.fix_bert == False:
+        optimizer_grouped_parameters.append(
+            {"params": [p for n, p in bert_parameters if not any(nd in n for nd in no_decay)],
+             "weight_decay": args.weight_decay,
+             "lr": args.bert_lr}
+        )
+        optimizer_grouped_parameters.append(
+            {"params": [p for n, p in bert_parameters if any(nd in n for nd in no_decay)],
+             "weight_decay": 0.0,
+             "lr": args.bert_lr},
+        )
+    else:
+        for k, v in bert_parameters:
+            v.requires_grad = False
 
     optimizer = AdamW(optimizer_grouped_parameters, lr=args.learning_rate, eps=args.adam_epsilon)
     scheduler = get_linear_schedule_with_warmup(
@@ -212,17 +228,7 @@ def load_and_cache_examples(args, mode, data_dir=None):
     return examples
 
 
-def get_dataset(args, examples, tokenizer, labels, pad_token_label_id, trans_examples=None):
-    features_tensors = get_feature_tensor(args, examples, tokenizer, labels, pad_token_label_id)
-
-    if trans_examples is not None:
-        trans_features_tensors = get_feature_tensor(args, trans_examples, tokenizer, labels, pad_token_label_id)
-        features_tensors = features_tensors + trans_features_tensors
-
-    return TensorDataset(*features_tensors)
-
-
-def get_feature_tensor(args, examples, tokenizer, labels, pad_token_label_id):
+def get_dataset(args, examples, tokenizer, labels, pad_token_label_id):
     features = convert_examples_to_features(
         examples,
         labels,
@@ -241,6 +247,10 @@ def get_feature_tensor(args, examples, tokenizer, labels, pad_token_label_id):
         pad_token=tokenizer.pad_token_id,
         pad_token_segment_id=tokenizer.pad_token_type_id,
         pad_token_label_id=pad_token_label_id,
+        neg_total=args.rep_total,
+        neg_mode=args.rep_mode,
+        pmi_json=args.pmi_json,
+        preserve_ratio=args.pmi_preserve
     )
     # Convert to Tensors and build dataset
     all_input_ids = torch.tensor([f.input_ids for f in features],
@@ -254,9 +264,27 @@ def get_feature_tensor(args, examples, tokenizer, labels, pad_token_label_id):
                                    dtype=torch.long)
     all_label_ids = torch.tensor([f.label_ids for f in features],
                                  dtype=torch.long)
+    # default generate negative sample
+    all_neg_input_ids = torch.tensor([f.neg_input_ids for f in features],
+                                     dtype=torch.long)
+    all_neg_input_mask = torch.tensor([f.neg_input_mask for f in features],
+                                      dtype=torch.long)
+    all_neg_valid_mask = torch.tensor([f.neg_valid_mask for f in features],
+                                      dtype=torch.long)
+    all_neg_segment_ids = torch.tensor([f.neg_segment_ids for f in features],
+                                       dtype=torch.long)
 
-    return [all_input_ids, all_input_mask, all_valid_mask,
-            all_segment_ids, all_label_ids]
+    return TensorDataset(
+        all_input_ids,
+        all_input_mask,
+        all_valid_mask,
+        all_segment_ids,
+        all_label_ids,
+        all_neg_input_ids,
+        all_neg_input_mask,
+        all_neg_valid_mask,
+        all_neg_segment_ids
+    )
 
 
 def resuming_training(args, train_dataloader):

@@ -94,6 +94,51 @@ nohup python main.py --gpu_id 6 --output_dir /root/RobustNER/out/bn_norm_ent_reg
 nohup python main.py --gpu_id 7 --output_dir /root/RobustNER/out/bn_norm_ent_reg_sample5_gama_5/ --epoch 40 --gama 5 --regular_z --batch_size 32 --do_train --do_eval --do_predict --do_robustness_eval > bn_norm_ent_reg_sample5_gama_5.log 2>&1 &
 
 # 加入 pmi 过滤，epoch negative sample构建策略
-nohup python main.py --gpu_id 1 --output_dir /root/RobustNER/out/bn_norm_ent_reg_sample5_gama_5/ --epoch 40 --gama 5 --regular_z --batch_size 32 --do_train --do_eval --do_predict --do_robustness_eval > bn_norm_ent_reg_sample5_gama_5.log 2>&1 &
+nohup python main.py --gpu_id 1 --output_dir /root/RobustNER/out/bn_norm_ent_reg_sample5_pmi_ngram/ --epoch 40 --rep_total --pmi_preserve 0.2 --rep_mode ngram --regular_z --batch_size 32 --do_train --do_eval --do_predict --do_robustness_eval > bn_norm_ent_reg_sample5_pmi_ngram.log 2>&1 &
 
---rep_total --pmi_preserve 0.2 --rep_mode ngram --regular_z --batch_size 32 --do_train --do_eval --do_predict --do_robustness_eval
+nohup python main.py --gpu_id 2 --output_dir /root/RobustNER/out/bn_norm_ent_reg_sample5_pmi_typos/ --epoch 40 --rep_total --pmi_preserve 0.2 --rep_mode typos --regular_z --batch_size 32 --do_train --do_eval --do_predict --do_robustness_eval > bn_norm_ent_reg_sample5_pmi_typos.log 2>&1 &
+
+# pmi ratio 实验
+nohup python main.py --gpu_id 1 --output_dir /root/RobustNER/out/bn_norm_ent_reg_sample5_pmi1_typos/ --epoch 50 --rep_total --pmi_preserve 0.1 --rep_mode typos --regular_z --batch_size 32 --do_train --do_eval --do_predict --do_robustness_eval > bn_norm_ent_reg_sample5_pmi1_typos.log 2>&1 &
+nohup python main.py --gpu_id 2 --output_dir /root/RobustNER/out/bn_norm_ent_reg_sample5_pmi3_typos/ --epoch 50 --rep_total --pmi_preserve 0.3 --rep_mode typos --regular_z --batch_size 32 --do_train --do_eval --do_predict --do_robustness_eval > bn_norm_ent_reg_sample5_pmi3_typos.log 2>&1 &
+nohup python main.py --gpu_id 3 --output_dir /root/RobustNER/out/bn_norm_ent_reg_sample5_pmi4_typos/ --epoch 50 --rep_total --pmi_preserve 0.4 --rep_mode typos --regular_z --batch_size 32 --do_train --do_eval --do_predict --do_robustness_eval > bn_norm_ent_reg_sample5_pmi4_typos.log 2>&1 &
+
+nohup python main.py --gpu_id 4 --output_dir /root/RobustNER/out/bn_norm_ent_reg_sample5_pmi1_ngram/ --epoch 50 --rep_total --pmi_preserve 0.1 --rep_mode ngram --regular_z --batch_size 32 --do_train --do_eval --do_predict --do_robustness_eval > bn_norm_ent_reg_sample5_pmi1_ngram.log 2>&1 &
+nohup python main.py --gpu_id 0 --output_dir /root/RobustNER/out/bn_norm_ent_reg_sample5_pmi3_ngram/ --epoch 50 --rep_total --pmi_preserve 0.3 --rep_mode ngram --regular_z --batch_size 20 --do_train --do_eval --do_predict --do_robustness_eval > bn_norm_ent_reg_sample5_pmi3_typos.log 2>&1 &
+# nohup python main.py --gpu_id 2 --output_dir /root/RobustNER/out/bn_norm_ent_reg_sample5_pmi4_ngram/ --epoch 50 --rep_total --pmi_preserve 0.4 --rep_mode ngram --regular_z --batch_size 32 --do_train --do_eval --do_predict --do_robustness_eval > bn_norm_ent_reg_sample5_pmi4_typos.log 2>&1 &
+
+
+# pmi 策略改进实验
+# 如果将替换词 tokenize ，那其数据处理方式和测试时候不同，导致对比无效
+--gpu_id 1  --epoch 5 --rep_total --pmi_preserve 0.3 --rep_mode typos --regular_z --batch_size 32 --do_train --do_eval --do_predict --do_robustness_eval
+--gpu_id 1  --epoch 5 --rep_total --pmi_preserve 0.3 --rep_mode ngram --regular_z --batch_size 32 --do_train --do_eval --do_predict --do_robustness_eval
+--gpu_id 1  --epoch 5 --rep_total --pmi_preserve 0.3 --rep_mode ngram --regular_z --batch_size 32 --do_train --do_eval --do_predict --do_robustness_eval
+
+nohup python main.py --gpu_id 1 --output_dir /root/RobustNER/out/bn_norm_ent_reg_sample5_pmi2_typos_new/ --epoch 50 --rep_total --pmi_preserve 0.2 --rep_mode typos --regular_z --batch_size 32 --do_train --do_eval --do_predict --do_robustness_eval > bn_norm_ent_reg_sample5_pmi2_typos_new.log 2>&1 &
+nohup python main.py --gpu_id 2 --output_dir /root/RobustNER/out/bn_norm_ent_reg_sample5_pmi3_typos_new/ --epoch 50 --rep_total --pmi_preserve 0.3 --rep_mode typos --regular_z --batch_size 32 --do_train --do_eval --do_predict --do_robustness_eval > bn_norm_ent_reg_sample5_pmi3_typos_new.log 2>&1 &
+nohup python main.py --gpu_id 3 --output_dir /root/RobustNER/out/bn_norm_ent_reg_sample5_pmi35_typos_new/ --epoch 50 --rep_total --pmi_preserve 0.35 --rep_mode typos --regular_z --batch_size 32 --do_train --do_eval --do_predict --do_robustness_eval > bn_norm_ent_reg_sample5_pmi35_typos_new.log 2>&1 &
+
+nohup python main.py --gpu_id 4 --output_dir /root/RobustNER/out/bn_norm_ent_reg_sample5_pmi2_ngram_new/ --epoch 50 --rep_total --pmi_preserve 0.2 --rep_mode ngram --regular_z --batch_size 32 --do_train --do_eval --do_predict --do_robustness_eval > bn_norm_ent_reg_sample5_pmi2_ngram_new.log 2>&1 &
+nohup python main.py --gpu_id 0 --output_dir /root/RobustNER/out/bn_norm_ent_reg_sample5_pmi3_ngram_new/ --epoch 50 --rep_total --pmi_preserve 0.3 --rep_mode ngram --regular_z --batch_size 20 --do_train --do_eval --do_predict --do_robustness_eval > bn_norm_ent_reg_sample5_pmi3_ngram_new.log 2>&1 &
+
+
+
+# fix 模型参数实验
+# 只 压缩最后一层，可以finetuning的参数太少，最终欠拟合
+nohup python main.py --gpu_id 2 --output_dir /root/RobustNER/out/bn_norm_fix/ --epoch 50 --rep_total --pmi_preserve 0.3 --rep_mode typos --batch_size 32 --do_train --do_eval --do_predict --do_robustness_eval > bn_norm_fix.log 2>&1 &
+
+# 多层 embedding 融合实验
+# fix 模型
+nohup python main.py --gpu_id 2 --output_dir /root/RobustNER/out/bn_norm_fix_multi/ --epoch 50 --rep_total --pmi_preserve 0.3 --rep_mode typos --batch_size 128 --do_train --do_eval --do_predict --do_robustness_eval > bn_norm_fix_multi.log 2>&1 &
+# 不fix模型
+nohup python main.py --gpu_id 3 --output_dir /root/RobustNER/out/bn_norm_multi/ --epoch 50  --fix_bert --rep_total --pmi_preserve 0.3 --rep_mode typos --batch_size 32 --do_train --do_eval --do_predict --do_robustness_eval > bn_norm_multi.log 2>&1 &
+nohup python main.py --gpu_id 4 --output_dir /root/RobustNER/out/bn_norm_1/ --epoch 50  --fix_bert --multi_layers --rep_total --pmi_preserve 0.3 --rep_mode typos --batch_size 32 --do_train --do_eval --do_predict --do_robustness_eval > bn_norm_1.log 2>&1 &
+
+# 简单加入context, OOV 提升5个点
+nohup python main.py --gpu_id 2 --output_dir /root/RobustNER/out/bsl_context/ --epoch 30  --baseline --multi_layers --fix_bert --regular_entity --regular_z --regular_norm --batch_size 32 --do_train --do_eval --do_predict --do_robustness_eval > bsl_context.log 2>&1 &
+
+
+# InfoNCE loss 实验
+nohup python main.py --gpu_id 1 --output_dir /root/RobustNER/out/bsl_reg_con/ --epoch 20  --multi_layers --fix_bert --regular_entity --regular_z --regular_norm --batch_size 32 --do_train --do_eval --do_predict --do_robustness_eval > bsl_reg_con.log 2>&1 &
+nohup python main.py --gpu_id 2 --output_dir /root/RobustNER/out/bsl_reg_con_entity/ --epoch 20  --multi_layers --fix_bert --regular_z --regular_norm --batch_size 32 --do_train --do_eval --do_predict --do_robustness_eval > bsl_reg_con_entity.log 2>&1 &
+

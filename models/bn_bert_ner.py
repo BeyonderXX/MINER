@@ -1,7 +1,7 @@
 from torch import nn
 import torch
 from .bert_ner import BertPreTrainedModel, BertModel, CRF, valid_sequence_output
-from .MI_estimators import CLUB, vCLUB, VIB, kl_div, kl_norm
+from .MI_estimators import CLUB, vCLUB, VIB, kl_div, kl_norm, InfoNCE
 
 
 class BertCrfWithBN(BertPreTrainedModel):
@@ -31,15 +31,28 @@ class BertCrfWithBN(BertPreTrainedModel):
         else:
             raise ValueError('Do not support {} estimator!'.format(args.mi_estimator))
 
-        self.post_encoder = MI_estimator(
-            embedding_dim=config.hidden_size,
-            hidden_dim=(args.hidden_dim + config.hidden_size) // 2,
-            tag_dim=args.hidden_dim,
-            device=args.device
-        )
+        self.layers_num = 1 if not args.multi_layers else self.bert.config.num_hidden_layers + 1
+        assert self.layers_num == 1, "Slow mode for layers num {}, forbidden!".format(self.layers_num)
+
+        self.post_encoder = []
+        tag_dim = int(args.hidden_dim/self.layers_num)
+        hidden_dim = tag_dim * self.layers_num
+
+        for i in range(self.layers_num):
+            post_encoder = MI_estimator(
+                    embedding_dim=config.hidden_size,
+                    hidden_dim=(tag_dim + config.hidden_size) // 2,
+                    tag_dim=tag_dim,
+                    device=args.device
+                )
+            # poster encoder 编号与bert layer顺序相反
+            setattr(self, 'poster_encoder_{}'.format(i), post_encoder)
+
         # r(t)
-        self.r_mean = nn.Parameter(torch.randn(args.max_seq_length, args.hidden_dim))
-        self.r_log_var = nn.Parameter(torch.randn(args.max_seq_length, args.hidden_dim))
+        self.r_mean = nn.Parameter(torch.randn(args.max_seq_length, hidden_dim))
+        self.r_log_var = nn.Parameter(torch.randn(args.max_seq_length, hidden_dim))
+
+        self.entity_regularizer = vCLUB()
 
         # I(Z; Y) 部分（decoder部分）
         self.sample_size = args.sample_size
@@ -47,13 +60,16 @@ class BertCrfWithBN(BertPreTrainedModel):
         if self.baseline:
             self.classifier = nn.Linear(config.hidden_size, config.num_labels)
         else:
-            self.classifier = nn.Linear(args.hidden_dim, config.num_labels)
+            self.classifier = nn.Linear(hidden_dim, config.num_labels)
         self.decoder = CRF(num_tags=config.num_labels, batch_first=True)
 
         # I(Z_i;X_i | X_(j!=i))
         self.regular_entity = args.regular_entity
         self.gama = args.gama
-        self.entity_regularizer = vCLUB()
+
+        self.regular_context = args.regular_context
+        self.theta = args.theta
+        self.context_regularizer = InfoNCE(config.hidden_size, args.hidden_dim)
 
         self.init_weights()
 
@@ -72,17 +88,13 @@ class BertCrfWithBN(BertPreTrainedModel):
         trans_attention_mask=None,
         trans_valid_mask=None,
         trans_token_type_ids=None,
-        trans_labels=None,
-        trans_position_ids=None,
-        trans_head_mask=None,
-        trans_inputs_embeds=None,
         decode=False,
         step=0
     ):
         """
         默认有 labels 为 train, 无 labels 为 test
         """
-        origin_out = self.encoding(
+        origin_out, layer_out = self.encoding(
             input_ids,
             attention_mask,
             token_type_ids,
@@ -93,18 +105,24 @@ class BertCrfWithBN(BertPreTrainedModel):
         )
 
         # p(t|x) 假设符合高斯分布
-
-        mean, log_var = self.post_encoder.get_mu_logvar(origin_out)
-        bsz, seqlen, _ = mean.shape
+        means, log_vars = self.post_encoding(origin_out)
+        mean = torch.cat(means, -1)
+        log_var = torch.cat(log_vars, -1)
+        bsz, seqlen, _ = means[0].shape
 
         # train sample by IID, test by argmax
         if self.baseline:
-            t = origin_out
+            t = torch.cat(origin_out, -1)
+            # context experiment
+            context_embedding = self.get_context_embedding(layer_out[0])
+            t = t + context_embedding
         elif labels is not None and self.sample_size > 0:
             # (bsz * sample_size, seq_len, tag_dim)
-            t = self.post_encoder.get_sample_from_param_batch(
-                mean, log_var, self.sample_size
-            )
+            post_encoder = getattr(self, 'poster_encoder_{}'.format(0))
+            t = post_encoder.get_sample_from_param_batch(
+                        mean, log_var, self.sample_size
+                    )
+
             # labels expand, (bsz * sample_size, seq_len)
             labels = labels.unsqueeze(1).repeat(1, self.sample_size, 1) \
                 .view(bsz * self.sample_size, seqlen)
@@ -148,19 +166,30 @@ class BertCrfWithBN(BertPreTrainedModel):
                 nlpy_t += self.beta * kl.mean()
 
             if self.regular_entity:
-                trans_out = self.encoding(
+                trans_out, trans_layer_out = self.encoding(
                     trans_input_ids,
                     trans_attention_mask,
                     trans_token_type_ids,
-                    trans_position_ids,
-                    trans_head_mask,
+                    position_ids,
+                    head_mask,
                     inputs_embeds,
                     trans_valid_mask
                 )
                 # upper bound of entity
-                entity_mi = self.entity_regularizer.update(origin_out,
-                                                           trans_out)
+                # 如果 bert fix 了， 这里对bert输出 minimize 因为参数量过小，效果很差
+                trans_means, log_vars = self.post_encoding(trans_out)
+                entity_mi = self.entity_regularizer.update(
+                    mean, torch.cat(trans_means, -1)
+                )
                 nlpy_t += self.gama * entity_mi
+
+            if self.regular_context:
+                context_mi = self.context_regularizer.mi_forward(
+                    mean, layer_out[0]
+                )
+                # minimize (-1) * lower_bound equals maximize lower_bound
+                context_mi_loss = (-1) * context_mi
+                nlpy_t += self.theta * context_mi_loss
 
             outputs = (nlpy_t,) + outputs
 
@@ -185,22 +214,51 @@ class BertCrfWithBN(BertPreTrainedModel):
             head_mask=head_mask,
             inputs_embeds=inputs_embeds
         )
-        sequence_output = outputs[0]
+        # （layer_num, bsz, seq_len, hidden_size）
+        sequence_outputs = outputs[2]
+
         # 把 padding 部分置零
-        sequence_output, attention_mask = valid_sequence_output(
-            sequence_output,
-            valid_mask,
-            attention_mask
-        )
-        sequence_output = self.dropout(sequence_output)
+        valid_outputs = []
 
-        return sequence_output
+        # 倒序取值
+        for sequence_output in sequence_outputs[-self.layers_num:][::-1]:
+            valid_output, attention_mask = valid_sequence_output(
+                sequence_output,
+                valid_mask,
+                attention_mask
+            )
+            valid_output = self.dropout(valid_output)
+            valid_outputs.append(valid_output)
 
-    def post_encoding(self, sequence_output):
-        # p(t|x) 基于采样得到的 mean 和 cov (假设符合高斯分布)
-        mean, cov = self.post_encoder.get_statistics_batch(sequence_output)
+        # （layer_num, (bsz, seq_len, hidden_size）)
+        return valid_outputs, sequence_outputs
 
-        return mean, cov
+    # 用来测试 context 对 bsl 的提升
+    def get_context_embedding(self, base_embedding):
+        # (bsz, seq_len, embedding_size)
+        bsz, seq_len, embedding_size = base_embedding.shape
+        position_masks = torch.eye(seq_len, device=self.device)
+
+        # (seq_len, seq_len)
+        position_mask = (position_masks[range(seq_len)] < 1).int() * (1 / seq_len)
+        # (bsz * embedding_zie, seq_len)
+        base_embedding = base_embedding.view(bsz, embedding_size, seq_len).view(bsz * embedding_size, seq_len)
+        # (bsz * embedding_zie, seq_len)
+        mask_embedding = torch.mm(base_embedding, position_mask)
+        mask_embedding = mask_embedding.view(bsz, embedding_size, seq_len).view(bsz, seq_len, embedding_size)
+
+        return mask_embedding
+
+    def post_encoding(self, origin_out):
+        # p(t|x) 假设符合高斯分布
+        means, log_vars = [], []
+        for i in range(len(origin_out)):
+            post_encoder = getattr(self, 'poster_encoder_{}'.format(i))
+            l_mean, l_log_var = post_encoder.get_mu_logvar(origin_out[i])
+            means.append(l_mean)
+            log_vars.append(l_log_var)
+
+        return means, log_vars
 
     def get_beta(self, step=0):
 

@@ -43,7 +43,6 @@ def train(args, model, tokenizer, labels, pad_token_label_id):
     """ Train the model """
     train_examples = load_and_cache_examples(args, mode="train")
     tb_writer = SummaryWriter(args.output_dir)
-
     training_steps = (len(train_examples) - 1 / args.epoch + 1) * args.epoch
 
     # Prepare optimizer and schedule (linear warmup and decay)
@@ -56,63 +55,41 @@ def train(args, model, tokenizer, labels, pad_token_label_id):
     logger.info("  Total train batch size = %d", args.batch_size)
     logger.info("  Total optimization steps = %d", training_steps)
 
-    train_dataset = None
     global_step = 0
     best_score = 0.0
     tr_loss, logging_loss = 0.0, 0.0
     model.zero_grad()
     train_iterator = trange(int(args.epoch), desc="Epoch")
+    epoch_num = 1
 
     for _ in train_iterator:
-        # optimize I(x_e;y_e|x!=e)
-        if args.regular_entity:
-            # 每个 epoch 动态构建
-            trans_examples = build_neg_samples(train_examples,
-                                               mode=args.rep_mode,
-                                               total=args.rep_total,
-                                               tokenizer=tokenizer,
-                                               pmi_path=args.pmi_json,
-                                               pmi_preserve=args.pmi_preserve
-                                               )
-            train_dataset = get_dataset(args, trans_examples, tokenizer, labels,
-                                        pad_token_label_id,
-                                        trans_examples=trans_examples)
-        else:
-            if not train_dataset:
-                train_dataset = get_dataset(args, train_examples, tokenizer,
-                                            labels, pad_token_label_id)
+        epoch_num += 1
+        train_dataset = get_dataset(args, train_examples, tokenizer,
+                                    labels, pad_token_label_id)
 
         train_sampler = RandomSampler(train_dataset)
         train_dataloader = DataLoader(train_dataset,
                                       sampler=train_sampler,
                                       batch_size=args.batch_size,
                                       collate_fn=collate_fn)
+        logger.info("Training epoch num {0}".format(epoch_num))
         epoch_iterator = tqdm(train_dataloader, desc="Iteration")
 
         for step, batch in enumerate(epoch_iterator):
             model.train()
             batch = tuple(t.to(args.device) for t in batch)
-            if args.regular_entity:
-                inputs = {"input_ids": batch[0],
-                          "attention_mask": batch[1],
-                          "valid_mask": batch[2],
-                          "token_type_ids": batch[3],
-                          "labels": batch[4],
+            inputs = {"input_ids": batch[0],
+                      "attention_mask": batch[1],
+                      "valid_mask": batch[2],
+                      "token_type_ids": batch[3],
+                      "labels": batch[4],
 
-                          "trans_input_ids": batch[5],
-                          "trans_attention_mask": batch[6],
-                          "trans_valid_mask": batch[7],
-                          "trans_token_type_ids": batch[8],
-                          "trans_labels": batch[9],
-                          }
-            else:
-                inputs = {"input_ids": batch[0],
-                          "attention_mask": batch[1],
-                          "valid_mask": batch[2],
-                          # RoBERTa don"t use segment_ids
-                          "token_type_ids": batch[3],
-                          "labels": batch[4]
-                          }
+                      "trans_input_ids": batch[5],
+                      "trans_attention_mask": batch[6],
+                      "trans_valid_mask": batch[7],
+                      "trans_token_type_ids": batch[8],
+                      }
+
             outputs = model(**inputs)
             loss = outputs[0]
             loss.backward()
@@ -239,8 +216,7 @@ def fast_evaluate(args, ckpt_dir, tokenizer_args, labels, pad_token_label_id,
     tokenizer = AutoTokenizer.from_pretrained(ckpt_dir, **tokenizer_args)
     model = AutoModelForCrfNer.from_pretrained(
         ckpt_dir,
-        args=args,
-        baseline=args.baseline
+        args=args
     )
     model.to(args.device)
     results, predictions = evaluate(args, model, tokenizer, labels,
@@ -262,32 +238,48 @@ def get_args():
     # Required parameters
     parser.add_argument(
         "--data_dir",
-        # default="/root/RobustNER/data/conll2003/origin/",
-        default="/root/RobustNER/data/debug/",
+        default="/root/RobustNER/data/conll2003/origin/",
+        # default="/root/RobustNER/data/debug/",
         type=str,
         help="The input data dir. Should contain the training files for the "
              "CoNLL-2003 NER task.",
     )
     parser.add_argument(
         "--output_dir",
-        # default="/root/RobustNER/out/bert_uncase/bn_ent_reg_1e_3/",
         default="/root/RobustNER/out/bert_uncase/debug/",
         type=str,
         help="The output directory where the model predictions and "
              "checkpoints will be written.",
     )
     # Other parameters
-    parser.add_argument("--gpu_id", default=1, type=int,
+    parser.add_argument("--gpu_id", default=0, type=int,
                         help="GPU number id")
 
     parser.add_argument(
-        "--epoch", default=35, type=float,
+        "--epoch", default=50, type=float,
         help="Total number of training epochs to perform."
     )
     parser.add_argument(
         "--hidden_dim", default=300, type=int,
         help="post encoder out dim"
     )
+
+    parser.add_argument(
+        "--fix_bert", action="store_false",
+        help="whether fix BERT params"
+    )
+
+    parser.add_argument(
+        "--multi_layers", action="store_false",
+        help="whether use multi layers' features"
+    )
+
+    # I(Z; context) parameters
+    parser.add_argument("--regular_context", action="store_false",
+                        help="Whether add I(z, context) regular.")
+
+    parser.add_argument("--theta", default=1,
+                        help="theta params")
 
     # I(X; Z) parameters
     parser.add_argument("--regular_z", action="store_false",
@@ -328,7 +320,10 @@ def get_args():
         help="MI estimator for entity and its encoding representation"
     )
 
+    # context
+
     # negative sample build mode
+
     parser.add_argument(
         "--rep_mode", default="typos",
         help="which strategy to replace entity, support typos and ngram now."
@@ -392,7 +387,8 @@ def main():
         num_labels=num_labels,
         id2label={str(i): label for i, label in enumerate(labels)},
         label2id={label: i for i, label in enumerate(labels)},
-        cache_dir=None
+        cache_dir=None,
+        output_hidden_states=True
     )
 
     #####

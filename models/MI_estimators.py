@@ -179,6 +179,36 @@ class InfoNCE(nn.Module):
         # compute the negative loss (maximise loss == minimise -loss)
         return lower_bound
 
+    def mi_forward(self, encode_out, bert_embed):
+        """
+
+        :param encode_out: (bsz, seq_len, embed)
+        :param bert_embed: (bsz, seq_len, 768)
+        :return:
+            info nce loss (bsz, seq_len)
+        """
+        bsz, seq_len, embed = encode_out.shape
+        lower_bounds = 0
+
+        for bsz_id in range(bsz):
+            # (seq_len, embed)
+            z = encode_out[bsz_id]
+            # (seq_len, 768)
+            x = bert_embed[bsz_id]
+            # (bsz, seq_len, embed)
+            z_sum = z.unsqueeze(0).expand(bsz, -1, -1)
+
+            # (seq_len)
+            scores = self.F_func(torch.cat([x, z], dim=-1))
+            # (bsz, seq_len)
+            scores_sum = self.F_func(torch.cat([bert_embed, z_sum], dim=-1)).squeeze()
+
+            # lower_bound = (scores - scores_sum.logsumexp(dim=0)).sum() + np.log(bsz) * seq_len
+            lower_bound = (scores.squeeze() - scores_sum.logsumexp(dim=0)).sum() + np.log(bsz) * seq_len
+            lower_bounds += lower_bound
+
+        return lower_bounds
+
 
 def kl_div(param1, param2):
     """
