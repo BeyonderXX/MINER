@@ -170,6 +170,7 @@ def prepare_optimizer_scheduler(args, model, training_steps):
     args.crf_lr = args.crf_lr if args.crf_lr else args.learning_rate
 
     optimizer_grouped_parameters = [
+        # other params
         {"params": [p for n, p in other_parameters if not any(nd in n for nd in no_decay)],
          "weight_decay": args.weight_decay,
          "lr": args.classifier_lr},
@@ -177,6 +178,18 @@ def prepare_optimizer_scheduler(args, model, training_steps):
          "weight_decay": 0.0,
          "lr": args.classifier_lr},
 
+        # bert params
+        {"params": [p for n, p in bert_parameters if
+                    not any(nd in n for nd in no_decay)],
+         "weight_decay": args.weight_decay,
+         "lr": args.bert_lr},
+
+        {"params": [p for n, p in bert_parameters if
+                    any(nd in n for nd in no_decay)],
+         "weight_decay": 0.0,
+         "lr": args.bert_lr},
+
+        # crf params
         {"params": [p for n, p in crf_parameters if not any(nd in n for nd in no_decay)],
          "weight_decay": args.weight_decay,
          "lr": args.crf_lr},
@@ -185,21 +198,6 @@ def prepare_optimizer_scheduler(args, model, training_steps):
          "lr": args.crf_lr},
     ]
 
-    # 是否固定模型参数
-    if args.fix_bert == False:
-        optimizer_grouped_parameters.append(
-            {"params": [p for n, p in bert_parameters if not any(nd in n for nd in no_decay)],
-             "weight_decay": args.weight_decay,
-             "lr": args.bert_lr}
-        )
-        optimizer_grouped_parameters.append(
-            {"params": [p for n, p in bert_parameters if any(nd in n for nd in no_decay)],
-             "weight_decay": 0.0,
-             "lr": args.bert_lr},
-        )
-    else:
-        for k, v in bert_parameters:
-            v.requires_grad = False
 
     optimizer = AdamW(optimizer_grouped_parameters, lr=args.learning_rate, eps=args.adam_epsilon)
     scheduler = get_linear_schedule_with_warmup(

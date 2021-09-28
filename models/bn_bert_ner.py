@@ -31,8 +31,8 @@ class BertCrfWithBN(BertPreTrainedModel):
         else:
             raise ValueError('Do not support {} estimator!'.format(args.mi_estimator))
 
-        self.layers_num = 1 if not args.multi_layers else self.bert.config.num_hidden_layers + 1
-        assert self.layers_num == 1, "Slow mode for layers num {}, forbidden!".format(self.layers_num)
+        # default just use last layer out
+        self.layers_num = 1
 
         self.post_encoder = []
         tag_dim = int(args.hidden_dim/self.layers_num)
@@ -110,6 +110,7 @@ class BertCrfWithBN(BertPreTrainedModel):
         mean = torch.cat(means, -1)
         log_var = torch.cat(log_vars, -1)
         bsz, seqlen, _ = means[0].shape
+        loss_dic = {}
 
         # train sample by IID, test by argmax
         if self.baseline:
@@ -151,11 +152,13 @@ class BertCrfWithBN(BertPreTrainedModel):
                 # reduction="mean"
             )
             # first item loss
+            loss_dic['crf'] = -1 * decoder_log_likely
             nlpy_t = -1 * decoder_log_likely
 
             # reg p(z|x) to N(0,1)
             if self.reg_norm:
                 kl_encoder = kl_norm(mean, log_var)
+                loss_dic['norm'] = self.get_beta(step) * kl_encoder
                 nlpy_t = nlpy_t + self.get_beta(step) * kl_encoder
 
             if self.regular_z:
@@ -164,6 +167,7 @@ class BertCrfWithBN(BertPreTrainedModel):
 
                 # second item loss
                 kl = kl_div((mean, log_var), (mean_r, log_var_r))
+                loss_dic['z'] = self.beta * kl.mean()
                 nlpy_t += self.beta * kl.mean()
 
             if self.regular_entity:
@@ -182,15 +186,18 @@ class BertCrfWithBN(BertPreTrainedModel):
                 entity_mi = self.entity_regularizer.update(
                     mean, torch.cat(trans_means, -1)
                 )
+                loss_dic['ent'] = self.gama * entity_mi
                 nlpy_t += self.gama * entity_mi
 
             if self.regular_context:
                 context_mi_loss = self.context_regularizer.mi_loss(
                     mean, layer_out[0], labels
                 )
+                loss_dic['con'] = self.theta * context_mi_loss
                 nlpy_t += self.theta * context_mi_loss
 
-            outputs = (nlpy_t,) + outputs
+            loss_dic['loss'] = nlpy_t
+            outputs = (loss_dic,) + outputs
 
         return outputs  # (loss), scores
 

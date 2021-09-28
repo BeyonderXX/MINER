@@ -36,7 +36,7 @@ except ImportError:
 
 
 TOKENIZER_ARGS = ["do_lower_case", "strip_accents", "keep_accents", "use_fast"]
-trans_list = ["CrossCategory", "EntityTyposSwap", "OOV", "ToLonger"]
+trans_list = ["CrossCategory", "EntityTyposSwap", "OOV"]
 
 
 def train(args, model, tokenizer, labels, pad_token_label_id):
@@ -91,12 +91,15 @@ def train(args, model, tokenizer, labels, pad_token_label_id):
                       }
 
             outputs = model(**inputs)
-            loss = outputs[0]
+            loss_dic = outputs[0]
+            loss = loss_dic['loss']
             loss.backward()
 
             fitlog.add_loss(loss.tolist(), name="Loss", step=global_step)
             tr_loss += loss.item()
-            epoch_iterator.set_description('Loss: {}'.format(round(loss.item(), 6)))
+            description = "".join(["{0}:{1}, ".format(k, round(v.item(), 3)) for k, v in loss_dic.items()]).strip(', ')
+
+            epoch_iterator.set_description(description)
             # clip gradients
             torch.nn.utils.clip_grad_norm_(model.parameters(), args.max_grad_norm)
 
@@ -112,13 +115,21 @@ def train(args, model, tokenizer, labels, pad_token_label_id):
 
                 if args.evaluate_during_training:
                     results, _ = evaluate(args, model, tokenizer, labels, pad_token_label_id, mode="dev",
-                                          prefix=global_step)
+                                          prefix="{}".format(global_step))
+                    weighted_score = results['f1']
+                    # TODO, add dev mode
+                    if args.do_robustness_eval:
+                        robust_f1 = robust_evaluate(args, args.output_dir, None, labels,
+                            pad_token_label_id, prefix="{}".format(global_step), model=model, tokenizer=tokenizer)
+                        # select best ckpt base weighted f1 score
+                        weighted_score = 0.35 * results['f1'] + 0.65 * robust_f1
+
                     for key, value in results.items():
                         if isinstance(value, float) or isinstance(value, int):
                             tb_writer.add_scalar("eval_{}".format(key), value, global_step)
 
-                    if best_score < results['f1']:
-                        best_score = results['f1']
+                    if best_score < weighted_score:
+                        best_score = weighted_score
                         output_dir = os.path.join(args.output_dir, "best_checkpoint")
                     else:
                         output_dir = args.output_dir
@@ -133,9 +144,10 @@ def evaluate(args, model, tokenizer, labels, pad_token_label_id, mode,
              prefix='', data_dir=None):
     eval_examples = load_and_cache_examples(args, mode=mode, data_dir=data_dir)
     eval_dataset = get_dataset(args, eval_examples, tokenizer, labels,
-                                pad_token_label_id)
+                               pad_token_label_id)
 
-    args.eval_batch_size = args.batch_size
+    # accelerate evaluation speed
+    args.eval_batch_size = 128
     eval_sampler = SequentialSampler(eval_dataset)
     eval_dataloader = DataLoader(eval_dataset,
                                  sampler=eval_sampler,
@@ -160,6 +172,7 @@ def evaluate(args, model, tokenizer, labels, pad_token_label_id, mode,
                       "token_type_ids": batch[3],
                       "decode": True
                       }
+            # without labels, direct out tags
             outputs = model(**inputs)
             tags = outputs[0]
 
@@ -211,14 +224,57 @@ def evaluate(args, model, tokenizer, labels, pad_token_label_id, mode,
     return results, preds_list
 
 
+# return average f1 in various robust testset
+def robust_evaluate(args, ckpt_dir, tokenizer_args, labels, pad_token_label_id,
+                    prefix="best ckpt", model=None, tokenizer=None):
+    base_dir = '/root/RobustNER/data/conll2003/v0/'
+    robust_f1 = 0
+
+    # eval best checkpoint
+    for trans in trans_list:
+        logger.info(
+            "Start evaluate Robustness of {0} {1} transformation".format(prefix, trans)
+        )
+        trans_dir = os.path.join(base_dir, trans, "trans")
+        assert os.path.exists(trans_dir)
+        results, predictions = fast_evaluate(
+            args, ckpt_dir, tokenizer_args, labels, pad_token_label_id,
+            mode="test", prefix="{0} {1}".format(prefix, trans),
+            data_dir=trans_dir, model=model, tokenizer=tokenizer
+        )
+        fitlog.add_metric(
+            {"test": {"{0}_{1}_f1".format(prefix, trans): results["f1"]}},
+            step=0
+        )
+        robust_f1 += results["f1"]
+
+        # Save predictions
+        if prefix == "best ckpt":
+            test_file = os.path.join(trans_dir, "test.txt")
+            out_trans_predictions = os.path.join(
+                ckpt_dir, "{0}_{1}_predictions.txt".format(prefix, trans)
+            )
+            predictions_save(test_file, predictions, out_trans_predictions)
+
+            logger.info(
+                "Finish evaluate Robustness of {0} {1} transformation".format(prefix, trans)
+            )
+
+    return robust_f1 / len(trans_list)
+
+
 def fast_evaluate(args, ckpt_dir, tokenizer_args, labels, pad_token_label_id,
-                  mode, prefix='', data_dir=None):
-    tokenizer = AutoTokenizer.from_pretrained(ckpt_dir, **tokenizer_args)
-    model = AutoModelForCrfNer.from_pretrained(
-        ckpt_dir,
-        args=args
-    )
-    model.to(args.device)
+                  mode, prefix='', model=None, tokenizer=None, data_dir=None):
+    if not tokenizer:
+        tokenizer = AutoTokenizer.from_pretrained(ckpt_dir, **tokenizer_args)
+
+    if not model:
+        model = AutoModelForCrfNer.from_pretrained(
+            ckpt_dir,
+            args=args
+        )
+        model.to(args.device)
+
     results, predictions = evaluate(args, model, tokenizer, labels,
                                     pad_token_label_id, mode=mode,
                                     prefix=prefix, data_dir=data_dir)
@@ -238,8 +294,8 @@ def get_args():
     # Required parameters
     parser.add_argument(
         "--data_dir",
-        default="/root/RobustNER/data/conll2003/origin/",
-        # default="/root/RobustNER/data/debug/",
+        # default="/root/RobustNER/data/conll2003/origin/",
+        default="/root/RobustNER/data/debug/",
         type=str,
         help="The input data dir. Should contain the training files for the "
              "CoNLL-2003 NER task.",
@@ -256,22 +312,12 @@ def get_args():
                         help="GPU number id")
 
     parser.add_argument(
-        "--epoch", default=50, type=float,
+        "--epoch", default=10, type=float,
         help="Total number of training epochs to perform."
     )
     parser.add_argument(
         "--hidden_dim", default=300, type=int,
         help="post encoder out dim"
-    )
-
-    parser.add_argument(
-        "--fix_bert", action="store_false",
-        help="whether fix BERT params"
-    )
-
-    parser.add_argument(
-        "--multi_layers", action="store_false",
-        help="whether use multi layers' features"
     )
 
     # I(Z; context) parameters
@@ -323,7 +369,6 @@ def get_args():
     # context
 
     # negative sample build mode
-
     parser.add_argument(
         "--rep_mode", default="typos",
         help="which strategy to replace entity, support typos and ngram now."
@@ -450,31 +495,9 @@ def main():
         predictions_save(test_file, predictions, output_test_predictions)
 
     if args.do_robustness_eval:
-        base_dir = '/root/RobustNER/data/conll2003/v0/'
         # eval best checkpoint
-        for trans in trans_list:
-            logger.info(
-                "Start evaluate Robustness of {0} transformation".format(trans)
-            )
-            trans_dir = os.path.join(base_dir, trans, "trans")
-            assert os.path.exists(trans_dir)
-            results, predictions = fast_evaluate(
-                args, best_ckpt_dir, tokenizer_args, labels, pad_token_label_id,
-                mode="test", prefix="best ckpt {0}".format(trans),
-                data_dir=trans_dir
-            )
-            fitlog.add_metric({"test": {"best_ckpt_{}_f1".format(trans): results["f1"]}}, step=0)
-
-            # Save predictions
-            test_file = os.path.join(trans_dir, "test.txt")
-            out_trans_predictions = os.path.join(
-                best_ckpt_dir, "{0}_predictions.txt".format(trans)
-            )
-            predictions_save(test_file, predictions, out_trans_predictions)
-
-            logger.info(
-                "Finish evaluate Robustness of {0} transformation".format(trans)
-            )
+        robust_evaluate(args, best_ckpt_dir, tokenizer_args, labels,
+                        pad_token_label_id, prefix="best ckpt")
 
 
 if __name__ == "__main__":
