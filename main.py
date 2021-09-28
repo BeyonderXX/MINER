@@ -60,7 +60,7 @@ def train(args, model, tokenizer, labels, pad_token_label_id):
     tr_loss, logging_loss = 0.0, 0.0
     model.zero_grad()
     train_iterator = trange(int(args.epoch), desc="Epoch")
-    epoch_num = 1
+    epoch_num = 0
 
     for _ in train_iterator:
         epoch_num += 1
@@ -278,7 +278,7 @@ def get_args():
     parser.add_argument("--regular_context", action="store_false",
                         help="Whether add I(z, context) regular.")
 
-    parser.add_argument("--theta", default=1,
+    parser.add_argument("--theta", default=1e-4, type=float,
                         help="theta params")
 
     # I(X; Z) parameters

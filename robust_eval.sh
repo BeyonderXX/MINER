@@ -139,6 +139,21 @@ nohup python main.py --gpu_id 2 --output_dir /root/RobustNER/out/bsl_context/ --
 
 
 # InfoNCE loss 实验
-nohup python main.py --gpu_id 1 --output_dir /root/RobustNER/out/bsl_reg_con/ --epoch 20  --multi_layers --fix_bert --regular_entity --regular_z --regular_norm --batch_size 32 --do_train --do_eval --do_predict --do_robustness_eval > bsl_reg_con.log 2>&1 &
-nohup python main.py --gpu_id 2 --output_dir /root/RobustNER/out/bsl_reg_con_entity/ --epoch 20  --multi_layers --fix_bert --regular_z --regular_norm --batch_size 32 --do_train --do_eval --do_predict --do_robustness_eval > bsl_reg_con_entity.log 2>&1 &
+nohup python main.py --gpu_id 1 --output_dir /root/RobustNER/out/bsl_reg_con/ --epoch 20  --multi_layers --fix_bert --regular_entity --regular_z --regular_norm --batch_size 8 --do_train --do_eval --do_predict --do_robustness_eval > bsl_reg_con.log 2>&1 &
+nohup python main.py --gpu_id 2 --output_dir /root/RobustNER/out/bsl_reg_con_entity/ --epoch 20  --multi_layers --fix_bert --regular_z --regular_norm --batch_size 8 --do_train --do_eval --do_predict --do_robustness_eval > bsl_reg_con_entity.log 2>&1 &
 
+# only reg entity 实验
+nohup python main.py --gpu_id 2 --output_dir /root/RobustNER/out/bsl_reg_con_only_ent/ --epoch 15  --multi_layers --fix_bert --regular_z --regular_norm --batch_size 10 --do_train --do_eval --do_predict --do_robustness_eval > bsl_reg_con_only_ent.log 2>&1 &
+
+nohup python main.py --gpu_id 2 --output_dir /root/RobustNER/out/bsl_reg_con_only_ent/ --epoch 50  --multi_layers --fix_bert --regular_z --regular_norm --batch_size 15 --do_train --do_eval --do_predict --do_robustness_eval > bsl_reg_con_only_ent.log 2>&1 &
+nohup python main.py --gpu_id 3 --output_dir /root/RobustNER/out/bsl_reg_con_only_ent_5/ --epoch 20 --theta 1e-5 --multi_layers --fix_bert --regular_z --regular_norm --batch_size 10 --do_train --do_eval --do_predict --do_robustness_eval > bsl_reg_con_only_ent_5.log 2>&1 &
+nohup python main.py --gpu_id 4 --output_dir /root/RobustNER/out/bsl_reg_con_only_ent_6/ --epoch 20 --theta 1e-6 --multi_layers --fix_bert --regular_z --regular_norm --batch_size 10 --do_train --do_eval --do_predict --do_robustness_eval > bsl_reg_con_only_ent_6.log 2>&1 &
+# infoNCE in entity (only context reg + only entity reg)
+nohup python main.py --gpu_id 3 --output_dir /root/RobustNER/out/bsl_reg_con_only_ent_5_entity_wo_ent_reg/ --epoch 20  --regular_entity --theta 1e-5 --multi_layers --fix_bert --regular_z --regular_norm --batch_size 8 --do_train --do_eval --do_predict --do_robustness_eval > bsl_reg_con_only_ent_5_entity_wo_ent_reg.log 2>&1 &
+nohup python main.py --gpu_id 4 --output_dir /root/RobustNER/out/bsl_reg_ent_reg3/ --epoch 20  --regular_context --rep_total --pmi_preserve 0.3  --rep_mode typos --multi_layers --fix_bert --regular_z --regular_norm --batch_size 8 --do_train --do_eval --do_predict --do_robustness_eval > bsl_reg_ent_reg3.log 2>&1 &
+
+# PMI0.3 复现实验
+nohup python main.py --gpu_id 2 --output_dir /root/RobustNER/out/bn_norm_ent_reg_sample5_pmi3_typos/ --epoch 50 --rep_total --pmi_preserve 0.3 --rep_mode typos --regular_z --batch_size 32 --do_train --do_eval --do_predict --do_robustness_eval > bn_norm_ent_reg_sample5_pmi3_typos.log 2>&1 &
+nohup python main.py --gpu_id 4 --output_dir /root/RobustNER/out/bsl_reg_ent_reg3_reimp/ --epoch 40  --regular_context --rep_total --pmi_preserve 0.3  --rep_mode typos --multi_layers --fix_bert --regular_z  --batch_size 32 --do_train --do_eval --do_predict --do_robustness_eval > bsl_reg_ent_reg3_reimp.log 2>&1 &
+# reg norm 原因检测
+nohup python main.py --gpu_id 3 --output_dir /root/RobustNER/out/bsl_reg_con_only_ent_5_entity_wo_ent_reg_norm/ --epoch 20  --regular_entity --theta 1e-5 --multi_layers --fix_bert --regular_z --batch_size 8 --do_train --do_eval --do_predict --do_robustness_eval > bsl_reg_con_only_ent_5_entity_wo_ent_reg_norm.log 2>&1 &

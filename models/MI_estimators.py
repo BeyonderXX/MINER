@@ -5,8 +5,7 @@ import torch
 import torch.nn as nn
 from abc import ABC, abstractmethod
 
-# TODO， hidden_size 调整
-hiddensize = 8
+
 SMALL = 1e-08
 
 
@@ -154,13 +153,19 @@ class vCLUB(UpperBound):
 
 # TODO
 class InfoNCE(nn.Module):
-    def __init__(self, x_dim, y_dim):
+    def __init__(self, x_dim, y_dim, max_seq_len, device=None):
         super(InfoNCE, self).__init__()
         self.lower_size = 300
-        self.F_func = nn.Sequential(nn.Linear(x_dim + y_dim, self.lower_size),
-                                    nn.ReLU(),
-                                    nn.Linear(self.lower_size, 1),
-                                    nn.Softplus())
+        self.set_com_score_fun(x_dim, y_dim, max_seq_len)
+        self.device = device
+
+    def set_com_score_fun(self, x_dim, y_dim, max_seq_len):
+        for i in range(max_seq_len):
+            F_func = nn.Sequential(nn.Linear(x_dim + y_dim, self.lower_size),
+                                   nn.ReLU(),
+                                   nn.Linear(self.lower_size, 1),
+                                   nn.Softplus())
+            setattr(self, "com_score_fun_{0}".format(i), F_func)
 
     def forward(self, x_samples, y_samples):  # samples have shape [sample_size, dim]
         # shuffle and concatenate
@@ -179,35 +184,87 @@ class InfoNCE(nn.Module):
         # compute the negative loss (maximise loss == minimise -loss)
         return lower_bound
 
-    def mi_forward(self, encode_out, bert_embed):
+    def mi_loss(self, encode_out, bert_embed, labels):
         """
 
         :param encode_out: (bsz, seq_len, embed)
+        :param bert_embed: (bsz, seq_len, 768)
         :param bert_embed: (bsz, seq_len, 768)
         :return:
             info nce loss (bsz, seq_len)
         """
         bsz, seq_len, embed = encode_out.shape
-        lower_bounds = 0
+        mi_losses = 0
 
-        for bsz_id in range(bsz):
-            # (seq_len, embed)
-            z = encode_out[bsz_id]
-            # (seq_len, 768)
-            x = bert_embed[bsz_id]
-            # (bsz, seq_len, embed)
-            z_sum = z.unsqueeze(0).expand(bsz, -1, -1)
+        # for pos_index in range(seq_len):
+        #     # (bsz, embed) in pos index
+        #     z = encode_out[:, pos_index, :].squeeze()
+        #
+        #     # embed 紧后 copy bsz 次
+        #     ga_index = torch.tensor(range(bsz), device=self.device).unsqueeze(-1).expand(-1, bsz*embed).reshape(-1, embed)
+        #     # (bsz*bsz, embed)
+        #     z_sum = z.gather(0, ga_index)
+        #
+        #     for target_index in range(seq_len):
+        #         # (bsz, 768) in target index
+        #         x = bert_embed[:, target_index, :].squeeze()
+        #         # 768 按照顺序 copy bsz 次
+        #         x_sum = x.repeat(bsz, 1)
+        #
+        #         F_func = getattr(self, "com_score_fun_{0}".format(target_index))
+        #
+        #         # (bsz)
+        #         scores = F_func(torch.cat([x, z], dim=-1))
+        #         # (bsz*bsz)
+        #         scores_sum = F_func(torch.cat([x_sum, z_sum], dim=-1)).reshape(bsz, bsz)
+        #
+        #         # lower_bound = (scores - scores_sum.logsumexp(dim=0)).sum() + np.log(bsz) * seq_len
+        #         # skip constant, minimize (-1) * lower_bound equals maximize lower_bound
+        #         lower_bound = (-1) * (scores.squeeze() - scores_sum.logsumexp(dim=-1)).sum()
+        #         lower_bounds += lower_bound
 
-            # (seq_len)
-            scores = self.F_func(torch.cat([x, z], dim=-1))
-            # (bsz, seq_len)
-            scores_sum = self.F_func(torch.cat([bert_embed, z_sum], dim=-1)).squeeze()
+        # (bsz, seq_len, embed) in pos index
+
+        # (batch, seq, embed)
+        z = encode_out
+        z_sum_ori = z.reshape(bsz*seq_len, 1, embed)
+        # (bsz*seq_len, bsz, embed)
+        z_sum = z_sum_ori.expand(-1, bsz, -1)
+
+        # # embed 紧后 copy bsz 次
+        # ga_index = torch.tensor(range(bsz), device=self.device).unsqueeze(-1).expand(-1, bsz*embed).reshape(bsz, -1, embed)
+        # # (bsz*bsz, embed)
+        # z_sum = z.gather(1, ga_index)
+
+        random_range = int((seq_len-1) * 0.8) + 1
+        random_idxes = np.random.randint(0, random_range, int((random_range-1)/3 + 1))
+        # mask non entity word
+        # (batch, seq)
+        token_mask = (labels > 0).int()
+
+        for target_index in random_idxes:
+            F_func = getattr(self, "com_score_fun_{0}".format(target_index))
+
+            # (bsz, 1, 768) in target index
+            x_ori = bert_embed[:, target_index, :]
+            # 按照顺序 copy seq_len 次
+            # (batch, seq, 768)
+            x = x_ori.unsqueeze(1).expand(-1, seq_len, -1)
+            # (batch, seq)
+            scores = F_func(torch.cat([x, z], dim=-1)).squeeze()
+
+            # (bsz*seq_len, bsz, 756)
+            x_sum = x_ori.reshape(1, bsz, 768).expand(bsz*seq_len, -1, -1)
+
+            # (bsz*seq_len, bsz)
+            scores_sum = F_func(torch.cat([x_sum, z_sum], dim=-1)).reshape(bsz, seq_len, bsz)
 
             # lower_bound = (scores - scores_sum.logsumexp(dim=0)).sum() + np.log(bsz) * seq_len
-            lower_bound = (scores.squeeze() - scores_sum.logsumexp(dim=0)).sum() + np.log(bsz) * seq_len
-            lower_bounds += lower_bound
+            # skip constant, minimize (-1) * lower_bound equals maximize lower_bound
+            mi_loss = (-1) * (token_mask * (scores.squeeze() - scores_sum.logsumexp(dim=-1))).sum()
+            mi_losses += mi_loss
 
-        return lower_bounds
+        return mi_losses
 
 
 def kl_div(param1, param2):

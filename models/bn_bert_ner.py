@@ -69,7 +69,8 @@ class BertCrfWithBN(BertPreTrainedModel):
 
         self.regular_context = args.regular_context
         self.theta = args.theta
-        self.context_regularizer = InfoNCE(config.hidden_size, args.hidden_dim)
+        self.context_regularizer = InfoNCE(config.hidden_size, args.hidden_dim,
+                                           args.max_seq_length, device=args.device)
 
         self.init_weights()
 
@@ -124,7 +125,7 @@ class BertCrfWithBN(BertPreTrainedModel):
                     )
 
             # labels expand, (bsz * sample_size, seq_len)
-            labels = labels.unsqueeze(1).repeat(1, self.sample_size, 1) \
+            ex_labels = labels.unsqueeze(1).repeat(1, self.sample_size, 1) \
                 .view(bsz * self.sample_size, seqlen)
 
             attention_mask = attention_mask.unsqueeze(1). \
@@ -143,10 +144,10 @@ class BertCrfWithBN(BertPreTrainedModel):
 
         if labels is not None:
             # labels 第0个 必须为 'O'
-            labels = torch.where(labels >= 0, labels, torch.zeros_like(labels))
+            ex_labels = torch.where(ex_labels >= 0, ex_labels, torch.zeros_like(ex_labels))
             # reduction 是否为 mean 待确认
             decoder_log_likely = self.decoder(
-                emissions=logits, tags=labels, mask=attention_mask,
+                emissions=logits, tags=ex_labels, mask=attention_mask,
                 # reduction="mean"
             )
             # first item loss
@@ -184,11 +185,9 @@ class BertCrfWithBN(BertPreTrainedModel):
                 nlpy_t += self.gama * entity_mi
 
             if self.regular_context:
-                context_mi = self.context_regularizer.mi_forward(
-                    mean, layer_out[0]
+                context_mi_loss = self.context_regularizer.mi_loss(
+                    mean, layer_out[0], labels
                 )
-                # minimize (-1) * lower_bound equals maximize lower_bound
-                context_mi_loss = (-1) * context_mi
                 nlpy_t += self.theta * context_mi_loss
 
             outputs = (nlpy_t,) + outputs
