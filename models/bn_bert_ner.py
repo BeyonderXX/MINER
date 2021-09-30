@@ -38,15 +38,14 @@ class BertCrfWithBN(BertPreTrainedModel):
         tag_dim = int(args.hidden_dim/self.layers_num)
         hidden_dim = tag_dim * self.layers_num
 
-        for i in range(self.layers_num):
-            post_encoder = MI_estimator(
-                    embedding_dim=config.hidden_size,
-                    hidden_dim=(tag_dim + config.hidden_size) // 2,
-                    tag_dim=tag_dim,
-                    device=args.device
-                )
-            # poster encoder 编号与bert layer顺序相反
-            setattr(self, 'poster_encoder_{}'.format(i), post_encoder)
+        self.post_encoder = MI_estimator(
+                embedding_dim=config.hidden_size,
+                hidden_dim=(tag_dim + config.hidden_size) // 2,
+                tag_dim=tag_dim,
+                device=args.device
+            )
+        # # poster encoder 编号与bert layer顺序相反
+        # setattr(self, 'poster_encoder_{}'.format(i), post_encoder)
 
         # r(t)
         self.r_mean = nn.Parameter(torch.randn(args.max_seq_length, hidden_dim))
@@ -106,10 +105,8 @@ class BertCrfWithBN(BertPreTrainedModel):
         )
 
         # p(t|x) 假设符合高斯分布
-        means, log_vars = self.post_encoding(origin_out)
-        mean = torch.cat(means, -1)
-        log_var = torch.cat(log_vars, -1)
-        bsz, seqlen, _ = means[0].shape
+        mean, log_var = self.post_encoder.get_mu_logvar(origin_out)
+        bsz, seqlen, _ = mean.shape
         loss_dic = {}
 
         # train sample by IID, test by argmax
@@ -120,8 +117,7 @@ class BertCrfWithBN(BertPreTrainedModel):
             t = t + context_embedding
         elif labels is not None and self.sample_size > 0:
             # (bsz * sample_size, seq_len, tag_dim)
-            post_encoder = getattr(self, 'poster_encoder_{}'.format(0))
-            t = post_encoder.get_sample_from_param_batch(
+            t = self.post_encoder.get_sample_from_param_batch(
                         mean, log_var, self.sample_size
                     )
 
@@ -182,9 +178,9 @@ class BertCrfWithBN(BertPreTrainedModel):
                 )
                 # upper bound of entity
                 # 如果 bert fix 了， 这里对bert输出 minimize 因为参数量过小，效果很差
-                trans_means, log_vars = self.post_encoding(trans_out)
+                trans_mean, trans_log_var = self.post_encoder.get_mu_logvar(trans_out)
                 entity_mi = self.entity_regularizer.update(
-                    mean, torch.cat(trans_means, -1)
+                    mean, trans_mean
                 )
                 loss_dic['ent'] = self.gama * entity_mi
                 nlpy_t += self.gama * entity_mi
@@ -221,23 +217,20 @@ class BertCrfWithBN(BertPreTrainedModel):
             inputs_embeds=inputs_embeds
         )
         # （layer_num, bsz, seq_len, hidden_size）
-        sequence_outputs = outputs[2]
+        sequence_output = outputs[0]
 
         # 把 padding 部分置零
-        valid_outputs = []
-
         # 倒序取值
-        for sequence_output in sequence_outputs[-self.layers_num:][::-1]:
-            valid_output, attention_mask = valid_sequence_output(
-                sequence_output,
-                valid_mask,
-                attention_mask
-            )
-            valid_output = self.dropout(valid_output)
-            valid_outputs.append(valid_output)
+        # for sequence_output in sequence_outputs[-self.layers_num:][::-1]:
+        valid_output, attention_mask = valid_sequence_output(
+            sequence_output,
+            valid_mask,
+            attention_mask
+        )
+        valid_output = self.dropout(valid_output)
 
         # （layer_num, (bsz, seq_len, hidden_size）)
-        return valid_outputs, sequence_outputs
+        return valid_output, outputs[2]
 
     # 用来测试 context 对 bsl 的提升
     def get_context_embedding(self, base_embedding):

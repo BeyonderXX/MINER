@@ -294,8 +294,8 @@ def get_args():
     # Required parameters
     parser.add_argument(
         "--data_dir",
-        # default="/root/RobustNER/data/conll2003/origin/",
-        default="/root/RobustNER/data/debug/",
+        default="/root/RobustNER/data/conll2003/origin/",
+        # default="/root/RobustNER/data/debug/",
         type=str,
         help="The input data dir. Should contain the training files for the "
              "CoNLL-2003 NER task.",

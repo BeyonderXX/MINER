@@ -156,11 +156,8 @@ def prepare_optimizer_scheduler(args, model, training_steps):
     if not args.baseline:
         other_parameters = other_parameters \
                            + list(model.entity_regularizer.named_parameters())\
-                           + [("r_mean", model.r_mean)] + [("r_log_var", model.r_log_var)]
-
-        for i in range(model.layers_num):
-            post_encoder = getattr(model, 'poster_encoder_{}'.format(i))
-            other_parameters += list(post_encoder.named_parameters())
+                           + [("r_mean", model.r_mean)] + [("r_log_var", model.r_log_var)] \
+                           + list(model.post_encoder.named_parameters())
 
         # 加入 context regular 参数
         other_parameters += list(model.context_regularizer.named_parameters())

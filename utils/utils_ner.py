@@ -114,7 +114,8 @@ def convert_examples_to_features(
         neg_total=False,
         neg_mode='typos',
         pmi_json=None,
-        preserve_ratio=0.3
+        preserve_ratio=0.3,
+        out_sample=False
 ):
     """ Loads a data file into a list of `InputBatch`s
         `cls_token_at_end` define the location of the CLS token:
@@ -131,8 +132,8 @@ def convert_examples_to_features(
         pmi_filter = {k: v[:int(len(v)*preserve_ratio)] for k, v in pmi_json.items()}
 
     for (ex_index, example) in enumerate(examples):
-        if ex_index % 10000 == 0:
-            logger.info("Writing example %d of %d", ex_index, len(examples))
+        # if ex_index % 10000 == 0:
+        #     logger.info("Writing example %d of %d", ex_index, len(examples))
 
         tokenized_words = []
 
@@ -184,7 +185,7 @@ def convert_examples_to_features(
         neg_input_ids, neg_input_mask, neg_valid_mask, neg_segment_ids, neg_label_ids = neg_feature
         check_feature(*neg_feature, max_seq_length)
 
-        if ex_index < 1:
+        if ex_index < 1 and out_sample:
             log_example(tokens, *feature)
             log_example(neg_tokens, *neg_feature, prefix='negative')
 
