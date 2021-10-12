@@ -33,19 +33,15 @@ class InputExample(object):
 class InputFeatures(object):
     """A single set of features of data."""
 
-    def __init__(self, input_ids, input_mask, valid_mask, segment_ids,
-                 label_ids, neg_input_ids, neg_input_mask,
-                 neg_valid_mask, neg_segment_ids
-                 ):
+    def __init__(
+            self, input_ids, input_mask, valid_mask,
+            segment_ids, label_ids
+    ):
         self.input_ids = input_ids
         self.input_mask = input_mask
         self.valid_mask = valid_mask
         self.segment_ids = segment_ids
         self.label_ids = label_ids
-        self.neg_input_ids = neg_input_ids
-        self.neg_valid_mask = neg_valid_mask
-        self.neg_input_mask = neg_input_mask
-        self.neg_segment_ids = neg_segment_ids
 
 
 def read_examples_from_file(data_dir, mode):
@@ -94,6 +90,88 @@ def get_valid_masks(tokenized_subwords):
     return tokens, valid_mask
 
 
+# 构建 typos 负例样本
+def build_typos_neg_examples(
+        examples,
+        tokenizer,
+        neg_total=False,
+        neg_mode='typos',
+        pmi_json=None,
+        preserve_ratio=0.3
+):
+    pmi_filter = None
+    if pmi_json:
+        os.path.exists(pmi_json)
+        pmi_json = json.load(open(pmi_json, "r+", encoding='utf-8'))
+        pmi_filter = {k: v[:int(len(v) * preserve_ratio)] for k, v in
+                      pmi_json.items()}
+
+    neg_examples = []
+    for (ex_index, example) in enumerate(examples):
+        neg_examples.append(
+            auto_neg_sample(
+                example,
+                total=neg_total,
+                mode=neg_mode,
+                tokenizer=tokenizer,
+                pmi_filter=pmi_filter
+            )
+        )
+    return neg_examples
+
+
+def build_ent_mask_examples(
+        examples,
+        tokenizer,
+        mask_ratio=0.85,
+        pmi_json=None,
+        preserve_ratio=0.3,
+        mask_token='[MASK]'
+):
+    pmi_filter = None
+    if pmi_json:
+        os.path.exists(pmi_json)
+        pmi_json = json.load(open(pmi_json, "r+", encoding='utf-8'))
+        pmi_filter = {k: v[:int(len(v) * preserve_ratio)] for k, v in
+                      pmi_json.items()}
+
+    masked_examples = []
+
+    for index, example in enumerate(examples):
+        entities = list(get_entities(example.labels))
+        new_example = copy.deepcopy(example)
+        random_num = random.uniform(0, 1)
+
+        # if not entities and random_num < 0.5:
+        if not entities:
+            masked_examples.append(new_example)
+            continue
+
+        for entity in entities:
+            i, j = entity[1:]
+            random_num = random.uniform(0, 1)
+
+            rep_words = [mask_token for _ in range(i, j + 1)]
+            new_example.words = new_example.words[:i] + rep_words + \
+                                new_example.words[j + 1:]
+
+            # if random_num < mask_ratio:  # replace by [MASK]
+            #     rep_words = [mask_token for _ in range(i, j+1)]
+            #     new_example.words = new_example.words[:i] + rep_words + \
+            #                         new_example.words[j + 1:]
+            # elif random_num < mask_ratio + (1 - mask_ratio) / 2:  # replace with typos words
+            #     rep_words = mask_rand_typos(new_example, entity, tokenizer,
+            #                                 PMI_filter=pmi_filter)
+            #
+            #     new_example.words = new_example.words[:i] + rep_words + \
+            #                         new_example.words[j + 1:]
+
+        assert len(new_example.words) == len(new_example.labels)
+        masked_examples.append(new_example)
+
+    return masked_examples
+
+
 # 将 example 改为模型的输入，当输入长度tokenize之后超过最大长度时，evaluate 可能会报错
 def convert_examples_to_features(
         examples,
@@ -111,11 +189,7 @@ def convert_examples_to_features(
         pad_token_label_id=-100,
         sequence_a_segment_id=0,
         mask_padding_with_zero=True,
-        neg_total=False,
-        neg_mode='typos',
-        pmi_json=None,
-        preserve_ratio=0.3,
-        out_sample=False
+        log_prefix=''
 ):
     """ Loads a data file into a list of `InputBatch`s
         `cls_token_at_end` define the location of the CLS token:
@@ -124,25 +198,11 @@ def convert_examples_to_features(
         `cls_token_segment_id` define the segment id associated to the CLS token (0 for BERT, 2 for XLNet)
     """
     features = []
-    pmi_filter = None
 
-    if pmi_json:
-        os.path.exists(pmi_json)
-        pmi_json = json.load(open(pmi_json, "r+", encoding='utf-8'))
-        pmi_filter = {k: v[:int(len(v)*preserve_ratio)] for k, v in pmi_json.items()}
-
-    for (ex_index, example) in enumerate(examples):
-        # if ex_index % 10000 == 0:
-        #     logger.info("Writing example %d of %d", ex_index, len(examples))
-
-        tokenized_words = []
-
-        for word in example.words:
-            tokenized_words.append(tokenizer.tokenize(word))
-        tokens, valid_mask = get_valid_masks(tokenized_words)
-
+    # 对每个样本进行 feature 转换
+    for (index, example) in enumerate(examples):
         feature = example_to_feature(
-            tokenized_words, example.labels, label_list, max_seq_length, tokenizer,
+            example, label_list, max_seq_length, tokenizer,
             cls_token_at_end=cls_token_at_end,
             cls_token=cls_token,
             cls_token_segment_id=cls_token_segment_id,
@@ -155,59 +215,30 @@ def convert_examples_to_features(
             sequence_a_segment_id=sequence_a_segment_id,
             mask_padding_with_zero=mask_padding_with_zero
         )
-        input_ids, input_mask, valid_mask, segment_ids, label_ids = feature
-        check_feature(*feature, max_seq_length)
+        check_feature(*feature[1:], max_seq_length)
 
-        # 假设为等长替换
-        neg_tokenized_words = auto_neg_sample(
-            example,
-            total=neg_total,
-            mode=neg_mode,
-            tokenizer=tokenizer,
-            pmi_filter=pmi_filter
-        )
-        neg_tokens, neg_valid_mask = get_valid_masks(neg_tokenized_words)
-        # TODO modify labels
-        neg_feature = example_to_feature(
-            neg_tokenized_words, example.labels, label_list, max_seq_length, tokenizer,
-            cls_token_at_end=cls_token_at_end,
-            cls_token=cls_token,
-            cls_token_segment_id=cls_token_segment_id,
-            sep_token=sep_token,
-            sep_token_extra=sep_token_extra,
-            pad_on_left=pad_on_left,
-            pad_token=pad_token,
-            pad_token_segment_id=pad_token_segment_id,
-            pad_token_label_id=pad_token_label_id,
-            sequence_a_segment_id=sequence_a_segment_id,
-            mask_padding_with_zero=mask_padding_with_zero
-        )
-        neg_input_ids, neg_input_mask, neg_valid_mask, neg_segment_ids, neg_label_ids = neg_feature
-        check_feature(*neg_feature, max_seq_length)
-
-        if ex_index < 1 and out_sample:
-            log_example(tokens, *feature)
-            log_example(neg_tokens, *neg_feature, prefix='negative')
+        if index < 1:
+            log_example(
+                *feature,
+                prefix="\n{0} example {1} feature".format(log_prefix, index)
+            )
 
         features.append(
-            InputFeatures(input_ids=input_ids,
-                          input_mask=input_mask,
-                          valid_mask=valid_mask,
-                          segment_ids=segment_ids,
-                          label_ids=label_ids,
-
-                          neg_input_ids=neg_input_ids,
-                          neg_input_mask=neg_input_mask,
-                          neg_valid_mask=neg_valid_mask,
-                          neg_segment_ids=neg_segment_ids
-                          )
+            InputFeatures(
+                input_ids=feature[1],
+                input_mask=feature[2],
+                valid_mask=feature[3],
+                segment_ids=feature[4],
+                label_ids=feature[5]
+            )
         )
+
     return features
 
 
 def log_example(tokens, input_ids, input_mask, valid_mask,
                 segment_ids, label_ids, prefix=''):
-    logger.info("*** Example {}***".format(prefix))
+    logger.info("*** {} ***".format(prefix))
     logger.info("tokens: %s", " ".join([str(x) for x in tokens]))
     logger.info("valid_mask: %s", " ".join([str(x) for x in valid_mask]))
     logger.info("input_ids: %s", " ".join([str(x) for x in input_ids]))
@@ -226,8 +257,7 @@ def check_feature(input_ids, input_mask, valid_mask,
 
 
 def example_to_feature(
-        tokenized_words,
-        labels,
+        example,
         label_list,
         max_seq_length,
         tokenizer,
@@ -243,9 +273,14 @@ def example_to_feature(
         sequence_a_segment_id=0,
         mask_padding_with_zero=True
 ):
+    tokenized_words = []
+
+    for word in example.words:
+        tokenized_words.append(tokenizer.tokenize(word))
+
     label_map = {label: i for i, label in enumerate(label_list)}
     tokens, valid_mask = get_valid_masks(tokenized_words)
-    label_ids = [label_map[label] for label in labels]
+    label_ids = [label_map[label] for label in example.labels]
 
     # Account for [CLS] and [SEP] with "- 2" and with "- 3" for RoBERTa.
     special_tokens_count = 3 if sep_token_extra else 2
@@ -301,7 +336,7 @@ def example_to_feature(
     while (len(label_ids) < max_seq_length):
         label_ids.append(pad_token_label_id)
 
-    return [input_ids, input_mask, valid_mask, segment_ids, label_ids]
+    return tokens, input_ids, input_mask, valid_mask, segment_ids, label_ids
 
 
 def collate_fn(batch):
@@ -357,67 +392,28 @@ def auto_neg_sample(
             raise NotImplementedError("Not support {} mode!".format(mode))
 
 
-def build_neg_samples(
-    origin_samples,
-    total=True,
-    rep_freq=False,
-    mode='typos',
-    tokenizer=None,
-    pmi_path=None,
-    pmi_preserve=0.1
-):
-    """
-    1. 怎么选取被替换实体词（1> 替换部分还是全部替换； 2> 按照频率替换，还是随机选择）
-    2. 怎么选取替换词 （1> ngram; 2> Typos; 3> 随机词表词 4> HotFlip rank ）
-
-    目前为等长替换策略
-
-    """
-    if rep_freq:
-        raise NotImplementedError("Not implement replace frequency entity!")
-
-    if total:
-        if mode == "typos":
-            return [total_rand_typos(x) for x in origin_samples]
-        elif mode == "ngram":
-            return [total_rand_ngram(x) for x in origin_samples]
-        else:
-            raise NotImplementedError("Not support {} mode!".format(mode))
-    else:
-        assert pmi_path is not None
-        pmi_json = json.load(open(pmi_path, "r+", encoding='utf-8'))
-        pmi_filter = {k: v[:int(len(v)*pmi_preserve)] for k, v in pmi_json.items()}
-        if mode == "typos":
-            return [part_rand_typos(x, tokenizer, pmi_filter) for x in origin_samples]
-        elif mode == "ngram":
-            return [part_rand_ngram(x, tokenizer, pmi_filter) for x in origin_samples]
-        else:
-            raise NotImplementedError("Not support {} mode!".format(mode))
-
-
 def rand_replace(rep_fun):
     """
     实体词按照某种模式替换
     """
     def gen_neg_subwords(example, tokenizer, PMI_filter=None):
-        new_example = copy.deepcopy(example)
-        entities = list(get_entities(new_example.labels))
+        neg_example = copy.deepcopy(example)
+        entities = list(get_entities(neg_example.labels))
 
         if not entities:
-            return copy.deepcopy(example.words)
+            return copy.deepcopy(example)
 
         # 默认一个sample只操作一个实体序列
         entity = random.choice(entities)
         i, j = entity[1:]
-        rep_sub_words = rep_fun(example, entity, tokenizer, PMI_filter=PMI_filter)
+        rep_words = rep_fun(example, entity, tokenizer, PMI_filter=PMI_filter)
 
-        new_sub_words = [tokenizer.tokenize(x) for x in new_example.words[:i]] \
-                        + rep_sub_words + \
-                        [tokenizer.tokenize(x) for x in new_example.words[j+1:]]
+        neg_example.words = neg_example.words[:i] + rep_words + \
+                            neg_example.words[j+1:]
 
-        assert len(new_sub_words) == len(new_example.labels)
+        assert len(neg_example.words) == len(neg_example.labels)
 
-        return new_sub_words
+        return neg_example
 
     return gen_neg_subwords
 
@@ -428,7 +424,7 @@ def total_rand_ngram(example, entity, tokenizer, PMI_filter=None):
     实体词全部替换为随机的ngram
     """
     i, j = entity[1:]
-    ngrams = [tokenizer.tokenize(generate_ngram()) for _ in range(i, j+1)]
+    ngrams = [generate_ngram() for _ in range(i, j+1)]
 
     return ngrams
 
@@ -450,7 +446,7 @@ def total_rand_typos(example, entity, tokenizer, PMI_filter=None):
             candidate = example.words[idx]
         typos_list.append(candidate)
 
-    return [tokenizer.tokenize(word) for word in typos_list]
+    return typos_list
 
 
 @rand_replace
@@ -479,7 +475,7 @@ def part_rand_ngram(example, entity, tokenizer, PMI_filter=None):
         # 如果将tokenize的subword加入subwords，会极大地加长subword的数目
         new_words.append(reverse_BERT_tokenize(new_subwords))
 
-    return [tokenizer.tokenize(word) for word in new_words]
+    return new_words
 
 
 @rand_replace
@@ -516,7 +512,43 @@ def part_rand_typos(example, entity, tokenizer, PMI_filter=None):
 
     assert(len(new_words) == j-i+1)
 
-    return [tokenizer.tokenize(word) for word in new_words]
+    return new_words
+
+
+def mask_rand_typos(example, entity, tokenizer, PMI_filter=None):
+    """
+    只向 PMI 值低的 subword 中插入 typos
+
+    """
+    i, j = entity[1:]
+    new_words = []
+
+    for token in example.words[i: j+1]:
+        subwords = tokenizer.tokenize(token)
+        # 保存的是一个词对应的subword
+        new_subwords = []
+
+        for subword in subwords:
+            if subword in PMI_filter[entity[0]]:
+                new_subwords.append(subword)
+            else:
+                # 判断 ##
+                sub_wo_sig = subword[2:] if '##' == subword[:2] else subword
+                rep_subwords = typos.get_candidates(sub_wo_sig, n=1)
+
+                if rep_subwords:
+                    rep_subword = rep_subwords[0]
+                else:
+                    rep_subword = sub_wo_sig
+
+                if subword[:2] == '##':
+                    rep_subword = '##' + rep_subword
+                new_subwords.append(rep_subword)
+        new_words.append(reverse_BERT_tokenize(new_subwords))
+
+    assert(len(new_words) == j-i+1)
+
+    return new_words
 
 
 def reverse_BERT_tokenize(segs):

@@ -103,10 +103,14 @@ nohup python main.py --gpu_id 2 --output_dir /root/RobustNER/out/bn_norm_ent_reg
 nohup python main.py --gpu_id 1 --output_dir /root/RobustNER/out/bn_norm_ent_reg_sample5_pmi1_typos/ --epoch 50 --rep_total --pmi_preserve 0.1 --rep_mode typos --regular_z --batch_size 32 --do_train --do_eval --do_predict --do_robustness_eval > bn_norm_ent_reg_sample5_pmi1_typos.log 2>&1 &
 nohup python main.py --gpu_id 2 --output_dir /root/RobustNER/out/bn_norm_ent_reg_sample5_pmi3_typos/ --epoch 50 --rep_total --pmi_preserve 0.3 --rep_mode typos --regular_z --batch_size 32 --do_train --do_eval --do_predict --do_robustness_eval > bn_norm_ent_reg_sample5_pmi3_typos.log 2>&1 &
 nohup python main.py --gpu_id 3 --output_dir /root/RobustNER/out/bn_norm_ent_reg_sample5_pmi4_typos/ --epoch 50 --rep_total --pmi_preserve 0.4 --rep_mode typos --regular_z --batch_size 32 --do_train --do_eval --do_predict --do_robustness_eval > bn_norm_ent_reg_sample5_pmi4_typos.log 2>&1 &
+## best epoch 重新验证效果
+nohup python main.py --gpu_id 2 --output_dir /root/RobustNER/out/bn_norm_ent_reg_sample5_pmi3_typos/ --rep_total --pmi_preserve 0.3 --rep_mode typos --regular_z --do_predict --do_robustness_eval > best_model_test.log 2>&1 &
+
 
 nohup python main.py --gpu_id 4 --output_dir /root/RobustNER/out/bn_norm_ent_reg_sample5_pmi1_ngram/ --epoch 50 --rep_total --pmi_preserve 0.1 --rep_mode ngram --regular_z --batch_size 32 --do_train --do_eval --do_predict --do_robustness_eval > bn_norm_ent_reg_sample5_pmi1_ngram.log 2>&1 &
 nohup python main.py --gpu_id 0 --output_dir /root/RobustNER/out/bn_norm_ent_reg_sample5_pmi3_ngram/ --epoch 50 --rep_total --pmi_preserve 0.3 --rep_mode ngram --regular_z --batch_size 20 --do_train --do_eval --do_predict --do_robustness_eval > bn_norm_ent_reg_sample5_pmi3_typos.log 2>&1 &
 # nohup python main.py --gpu_id 2 --output_dir /root/RobustNER/out/bn_norm_ent_reg_sample5_pmi4_ngram/ --epoch 50 --rep_total --pmi_preserve 0.4 --rep_mode ngram --regular_z --batch_size 32 --do_train --do_eval --do_predict --do_robustness_eval > bn_norm_ent_reg_sample5_pmi4_typos.log 2>&1 &
+nohup python main.py --gpu_id 2 --epoch 5 --rep_total --pmi_preserve 0.3 --rep_mode typos --regular_z --batch_size 32 --do_train --do_eval --do_predict --do_robustness_eval > test.log 2>&1 &
 
 
 
@@ -178,3 +182,22 @@ nohup python main.py --gpu_id 3 --output_dir /root/RobustNER/out/reg_norm_reg_co
 
 # 5. context 约束 1e-5 + reg norm + reg ent(typos 增强 + PMI )
 nohup python main.py --gpu_id 4 --output_dir /root/RobustNER/out/reg_ent_pmi3_reg_norm_reg_cont_5/ --epoch 20  --regular_context --theta 1e-6 --rep_total --pmi_preserve 0.3 --rep_mode typos --regular_z  --pmi_preserve 0.3 --rep_mode typos --batch_size 8 --do_train --do_eval --do_predict --do_robustness_eval > reg_ent_pmi3_reg_norm_reg_cont_5.log 2>&1 &
+
+
+# 训练
+nohup python main.py --gpu_id 0 --output_dir /root/RobustNER/out/bert_bsl/ --epoch 30  --baseline --regular_z --regular_norm --regular_entity --regular_context --batch_size 128 --do_train --do_eval --do_predict --do_robustness_eval > bert_bsl.log 2>&1 &
+# 重现pmi效果
+nohup python main.py --gpu_id 1 --output_dir /root/RobustNER/out/best_re_imp/ --epoch 30  --regular_context --regular_z --rep_total --pmi_preserve 0.3 --rep_mode typos --batch_size 16 --do_train --do_eval --do_predict --do_robustness_eval > best_re_imp.log 2>&1 &
+
+# 临时代码，训练 mask bert 模型(typos)
+nohup python main.py --gpu_id 2 --output_dir /root/RobustNER/out/mask_bert_typos/ --epoch 50 --baseline --regular_context --regular_z --regular_entity --regular_norm --rep_total --pmi_preserve 0.3 --rep_mode typos --batch_size 128 --do_train --do_eval --do_predict --do_robustness_eval > mask_bert_typos.log 2>&1 &
+# 临时代码，训练 mask bert 模型，mask + keep
+nohup python main.py --gpu_id 0 --output_dir /root/RobustNER/out/mask_keep_bert/ --epoch 50 --baseline --regular_context --regular_z --regular_entity --regular_norm --rep_total --pmi_preserve 0.3 --rep_mode typos --batch_size 128 --do_train --do_eval --do_predict --do_robustness_eval > mask_keep_bert.log 2>&1 &
+
+# 临时代码，训练 mask bert 模型，只有 mask
+nohup python main.py --gpu_id 1 --output_dir /root/RobustNER/out/mask_full_bert/ --epoch 50 --baseline --regular_context --regular_z --regular_entity --regular_norm --rep_total --pmi_preserve 0.3 --rep_mode typos --batch_size 128 --do_train --do_eval --do_predict --do_robustness_eval > mask_full_bert.log 2>&1 &
+
+
+# 对比样本loss
+nohup python main.py --gpu_id 0 --output_dir /root/RobustNER/out/typos_mse/ --epoch 50 --baseline --regular_context --regular_z --regular_norm --rep_total --pmi_preserve 0.3 --rep_mode typos --batch_size 64 --do_train --do_eval --do_predict --do_robustness_eval > typos_mse.log 2>&1 &
+nohup python main.py --gpu_id 1 --output_dir /root/RobustNER/out/typos_cos/ --epoch 50 --gama 1e-2 --baseline --regular_context --regular_z --regular_norm --rep_total --pmi_preserve 0.3 --rep_mode typos --batch_size 50 --do_train --do_eval --do_predict --do_robustness_eval > typos_cos.log 2>&1 &

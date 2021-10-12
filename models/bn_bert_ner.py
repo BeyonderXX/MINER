@@ -94,6 +94,7 @@ class BertCrfWithBN(BertPreTrainedModel):
         """
         默认有 labels 为 train, 无 labels 为 test
         """
+        # origin_out = self.encoding(
         origin_out, layer_out = self.encoding(
             input_ids,
             attention_mask,
@@ -104,34 +105,40 @@ class BertCrfWithBN(BertPreTrainedModel):
             valid_mask
         )
 
-        # p(t|x) 假设符合高斯分布
-        mean, log_var = self.post_encoder.get_mu_logvar(origin_out)
-        bsz, seqlen, _ = mean.shape
-        loss_dic = {}
+        t = origin_out
+        ex_labels = labels
 
-        # train sample by IID, test by argmax
-        if self.baseline:
-            t = torch.cat(origin_out, -1)
-            # context experiment
-            context_embedding = self.get_context_embedding(layer_out[0])
-            t = t + context_embedding
-        elif labels is not None and self.sample_size > 0:
-            # (bsz * sample_size, seq_len, tag_dim)
-            t = self.post_encoder.get_sample_from_param_batch(
-                        mean, log_var, self.sample_size
-                    )
-
-            # labels expand, (bsz * sample_size, seq_len)
-            ex_labels = labels.unsqueeze(1).repeat(1, self.sample_size, 1) \
-                .view(bsz * self.sample_size, seqlen)
-
-            attention_mask = attention_mask.unsqueeze(1). \
-                repeat(1, self.sample_size, 1). \
-                view(bsz * self.sample_size, seqlen)
-        else:
-            t = mean
+        # # useless delete
+        # # p(t|x) 假设符合高斯分布
+        # mean, log_var = self.post_encoder.get_mu_logvar(origin_out)
+        # bsz, seqlen, _ = mean.shape
+        #
+        # # train sample by IID, test by argmax
+        # if self.baseline:
+        #     t = origin_out
+        #     ex_labels = labels
+        #     # # context experiment
+        #     # context_embedding = self.get_context_embedding(layer_out[0])
+        #     # t = t + context_embedding
+        # elif labels is not None and self.sample_size > 0:
+        #     # (bsz * sample_size, seq_len, tag_dim)
+        #     t = self.post_encoder.get_sample_from_param_batch(
+        #                 mean, log_var, self.sample_size
+        #             )
+        #
+        #     # labels expand, (bsz * sample_size, seq_len)
+        #     ex_labels = labels.unsqueeze(1).repeat(1, self.sample_size, 1) \
+        #         .view(bsz * self.sample_size, seqlen)
+        #
+        #     attention_mask = attention_mask.unsqueeze(1). \
+        #         repeat(1, self.sample_size, 1). \
+        #         view(bsz * self.sample_size, seqlen)
+        # else:
+        #     t = mean
+        #     ex_labels = labels
 
         logits = self.classifier(t)
+        loss_dic = {}
 
         if decode:
             tags = self.decoder.decode(logits, attention_mask)
@@ -152,19 +159,45 @@ class BertCrfWithBN(BertPreTrainedModel):
             nlpy_t = -1 * decoder_log_likely
 
             # reg p(z|x) to N(0,1)
-            if self.reg_norm:
-                kl_encoder = kl_norm(mean, log_var)
-                loss_dic['norm'] = self.get_beta(step) * kl_encoder
-                nlpy_t = nlpy_t + self.get_beta(step) * kl_encoder
-
-            if self.regular_z:
-                mean_r = self.r_mean[:seqlen].unsqueeze(0).expand(bsz, -1, -1)
-                log_var_r = self.r_log_var[:seqlen].unsqueeze(0).expand(bsz, -1, -1)
-
-                # second item loss
-                kl = kl_div((mean, log_var), (mean_r, log_var_r))
-                loss_dic['z'] = self.beta * kl.mean()
-                nlpy_t += self.beta * kl.mean()
+            # if self.reg_norm:
+            #     kl_encoder = kl_norm(mean, log_var)
+            #     loss_dic['norm'] = self.get_beta(step) * kl_encoder
+            #     nlpy_t = nlpy_t + self.get_beta(step) * kl_encoder
+            #
+            # if self.regular_z:
+            #     mean_r = self.r_mean[:seqlen].unsqueeze(0).expand(bsz, -1, -1)
+            #     log_var_r = self.r_log_var[:seqlen].unsqueeze(0).expand(bsz, -1, -1)
+            #
+            #     # second item loss
+            #     kl = kl_div((mean, log_var), (mean_r, log_var_r))
+            #     loss_dic['z'] = self.beta * kl.mean()
+            #     nlpy_t += self.beta * kl.mean()
+            #
+            # if self.regular_entity:
+            #     trans_out, trans_layer_out = self.encoding(
+            #         trans_input_ids,
+            #         trans_attention_mask,
+            #         trans_token_type_ids,
+            #         position_ids,
+            #         head_mask,
+            #         inputs_embeds,
+            #         trans_valid_mask
+            #     )
+            #     # upper bound of entity
+            #     # 如果 bert fix 了， 这里对bert输出 minimize 因为参数量过小，效果很差
+            #     trans_mean, trans_log_var = self.post_encoder.get_mu_logvar(trans_out)
+            #     entity_mi = self.entity_regularizer.update(
+            #         mean, trans_mean
+            #     )
+            #     loss_dic['ent'] = self.gama * entity_mi
+            #     nlpy_t += self.gama * entity_mi
+            #
+            # if self.regular_context:
+            #     context_mi_loss = self.context_regularizer.mi_loss(
+            #         mean, layer_out[0], labels
+            #     )
+            #     loss_dic['con'] = self.theta * context_mi_loss
+            #     nlpy_t += self.theta * context_mi_loss
 
             if self.regular_entity:
                 trans_out, trans_layer_out = self.encoding(
@@ -176,24 +209,18 @@ class BertCrfWithBN(BertPreTrainedModel):
                     inputs_embeds,
                     trans_valid_mask
                 )
-                # upper bound of entity
-                # 如果 bert fix 了， 这里对bert输出 minimize 因为参数量过小，效果很差
-                trans_mean, trans_log_var = self.post_encoder.get_mu_logvar(trans_out)
-                entity_mi = self.entity_regularizer.update(
-                    mean, trans_mean
+                # # upper bound of entity
+                # # 如果 bert fix 了， 这里对bert输出 minimize 因为参数量过小，效果很差
+                # trans_mean, trans_log_var = self.post_encoder.get_mu_logvar(trans_out)
+                entity_mi = self.entity_regularizer.mse(
+                    t, trans_out
                 )
-                loss_dic['ent'] = self.gama * entity_mi
-                nlpy_t += self.gama * entity_mi
-
-            if self.regular_context:
-                context_mi_loss = self.context_regularizer.mi_loss(
-                    mean, layer_out[0], labels
-                )
-                loss_dic['con'] = self.theta * context_mi_loss
-                nlpy_t += self.theta * context_mi_loss
+                loss_dic['ent'] = self.gama * entity_mi.sum()
+                nlpy_t += self.gama * entity_mi.sum()
 
             loss_dic['loss'] = nlpy_t
             outputs = (loss_dic,) + outputs
+            # outputs = (nlpy_t,) + outputs
 
         return outputs  # (loss), scores
 
@@ -231,6 +258,7 @@ class BertCrfWithBN(BertPreTrainedModel):
 
         # （layer_num, (bsz, seq_len, hidden_size）)
         return valid_output, outputs[2]
+        # return valid_output
 
     # 用来测试 context 对 bsl 的提升
     def get_context_embedding(self, base_embedding):

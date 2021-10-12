@@ -143,6 +143,29 @@ class vCLUB(UpperBound):
         # return upper_bound/2.
         return upper_bound
 
+    def mse(self, y_samples, y_n_samples):
+        """
+        approximate q(y|x) - q(y'|x)
+
+        :param y_samples: [-1, 1, hidden_dim]
+        :param y_n_samples: [-1, 1, hidden_dim]
+        :return:
+               mi estimation [nsample, 1]
+        """
+
+        return (y_samples - y_n_samples) ** 2 / 2
+
+    def consine(self, y_samples, y_n_samples):
+        """
+        approximate q(y|x) - q(y'|x)
+
+        :param y_samples: [-1, 1, hidden_dim]
+        :param y_n_samples: [-1, 1, hidden_dim]
+        :return:
+               mi estimation [nsample, 1]
+        """
+        return torch.cosine_similarity(y_samples, y_n_samples, dim=-1)
+
     def loglikeli(self, x_samples, y_samples):
         return 0
 

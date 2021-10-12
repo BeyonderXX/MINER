@@ -7,7 +7,7 @@ import logging
 import argparse
 
 from torch.utils.data import TensorDataset
-from utils.utils_ner import convert_examples_to_features, read_examples_from_file, build_neg_samples
+from utils.utils_ner import convert_examples_to_features, read_examples_from_file, build_typos_neg_examples, build_ent_mask_examples
 
 from transformers import (
     AdamW,
@@ -223,7 +223,39 @@ def load_and_cache_examples(args, mode, data_dir=None):
     return examples
 
 
-def get_dataset(args, examples, tokenizer, labels, pad_token_label_id):
+# 获取原来数据集和负样本数据集特征
+def get_ds_features(args, examples, tokenizer, labels, pad_token_label_id):
+    # input_ids, input_mask, valid_mask, segment_ids, label_ids
+    features = dataset_2_features(args, examples, tokenizer, labels, pad_token_label_id)
+
+    neg_examples = build_typos_neg_examples(examples, tokenizer,
+                                            neg_total=args.rep_total,
+                                            neg_mode=args.rep_mode,
+                                            pmi_json=args.pmi_json,
+                                            preserve_ratio=args.pmi_preserve)
+    neg_features = dataset_2_features(args, neg_examples, tokenizer, labels, pad_token_label_id, log_prefix='negative')
+
+    return TensorDataset(
+        *features,
+        *neg_features
+    )
+
+
+# 获取 mask 机制模型数据集特征
+def get_mask_ds_features(args, examples, tokenizer, labels, pad_token_label_id):
+    masked_examples = build_ent_mask_examples(examples, tokenizer,
+                                              mask_ratio=0.85,
+                                              mask_token='[MASK]',
+                                              pmi_json=args.pmi_json,
+                                              preserve_ratio=args.pmi_preserve)
+    features = dataset_2_features(args, masked_examples, tokenizer, labels,
+                                  pad_token_label_id)
+    return TensorDataset(
+        *features
+    )
+
+
+def dataset_2_features(args, examples, tokenizer, labels, pad_token_label_id, log_prefix=''):
     features = convert_examples_to_features(
         examples,
         labels,
@@ -242,11 +274,9 @@ def get_dataset(args, examples, tokenizer, labels, pad_token_label_id):
         pad_token=tokenizer.pad_token_id,
         pad_token_segment_id=tokenizer.pad_token_type_id,
         pad_token_label_id=pad_token_label_id,
-        neg_total=args.rep_total,
-        neg_mode=args.rep_mode,
-        pmi_json=args.pmi_json,
-        preserve_ratio=args.pmi_preserve
+        log_prefix=log_prefix
     )
+
     # Convert to Tensors and build dataset
     all_input_ids = torch.tensor([f.input_ids for f in features],
                                  dtype=torch.long)
@@ -259,27 +289,8 @@ def get_dataset(args, examples, tokenizer, labels, pad_token_label_id):
                                    dtype=torch.long)
     all_label_ids = torch.tensor([f.label_ids for f in features],
                                  dtype=torch.long)
-    # default generate negative sample
-    all_neg_input_ids = torch.tensor([f.neg_input_ids for f in features],
-                                     dtype=torch.long)
-    all_neg_input_mask = torch.tensor([f.neg_input_mask for f in features],
-                                      dtype=torch.long)
-    all_neg_valid_mask = torch.tensor([f.neg_valid_mask for f in features],
-                                      dtype=torch.long)
-    all_neg_segment_ids = torch.tensor([f.neg_segment_ids for f in features],
-                                       dtype=torch.long)
 
-    return TensorDataset(
-        all_input_ids,
-        all_input_mask,
-        all_valid_mask,
-        all_segment_ids,
-        all_label_ids,
-        all_neg_input_ids,
-        all_neg_input_mask,
-        all_neg_valid_mask,
-        all_neg_segment_ids
-    )
+    return all_input_ids, all_input_mask, all_valid_mask, all_segment_ids, all_label_ids
 
 
 def resuming_training(args, train_dataloader):

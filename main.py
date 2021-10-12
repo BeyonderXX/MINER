@@ -64,8 +64,14 @@ def train(args, model, tokenizer, labels, pad_token_label_id):
 
     for _ in train_iterator:
         epoch_num += 1
-        train_dataset = get_dataset(args, train_examples, tokenizer,
-                                    labels, pad_token_label_id)
+        # input_ids, input_mask, valid_mask, segment_ids, label_ids
+        # neg(input_ids, input_mask, valid_mask, segment_ids, label_ids)
+        train_dataset = get_ds_features(args, train_examples, tokenizer,
+                                        labels, pad_token_label_id)
+
+        # mask mode
+        # train_dataset = get_mask_ds_features(args, train_examples, tokenizer,
+        #                                      labels, pad_token_label_id)
 
         train_sampler = RandomSampler(train_dataset)
         train_dataloader = DataLoader(train_dataset,
@@ -78,6 +84,28 @@ def train(args, model, tokenizer, labels, pad_token_label_id):
         for step, batch in enumerate(epoch_iterator):
             model.train()
             batch = tuple(t.to(args.device) for t in batch)
+            # mask training
+            # inputs = {"input_ids": batch[0],
+            #           "attention_mask": batch[1],
+            #           "valid_mask": batch[2],
+            #           "token_type_ids": batch[3],
+            #           "labels": batch[4]
+            #           }
+
+            # best ckpt just noise training
+            # inputs = {"input_ids": batch[5],
+            #           "attention_mask": batch[6],
+            #           "valid_mask": batch[7],
+            #           "token_type_ids": batch[8],
+            #           "labels": batch[4],
+            #
+            #           "trans_input_ids": batch[5],
+            #           "trans_attention_mask": batch[6],
+            #           "trans_valid_mask": batch[7],
+            #           "trans_token_type_ids": batch[8],
+            #           }
+
+            # typos constraint training
             inputs = {"input_ids": batch[0],
                       "attention_mask": batch[1],
                       "valid_mask": batch[2],
@@ -117,12 +145,15 @@ def train(args, model, tokenizer, labels, pad_token_label_id):
                     results, _ = evaluate(args, model, tokenizer, labels, pad_token_label_id, mode="dev",
                                           prefix="{}".format(global_step))
                     weighted_score = results['f1']
+
                     # TODO, add dev mode
-                    if args.do_robustness_eval:
+                    if args.do_robustness_eval and epoch_num > 5:
                         robust_f1 = robust_evaluate(args, args.output_dir, None, labels,
                             pad_token_label_id, prefix="{}".format(global_step), model=model, tokenizer=tokenizer)
                         # select best ckpt base weighted f1 score
                         weighted_score = 0.35 * results['f1'] + 0.65 * robust_f1
+                    else:
+                        weighted_score *= weighted_score
 
                     for key, value in results.items():
                         if isinstance(value, float) or isinstance(value, int):
@@ -143,11 +174,11 @@ def train(args, model, tokenizer, labels, pad_token_label_id):
 def evaluate(args, model, tokenizer, labels, pad_token_label_id, mode,
              prefix='', data_dir=None):
     eval_examples = load_and_cache_examples(args, mode=mode, data_dir=data_dir)
-    eval_dataset = get_dataset(args, eval_examples, tokenizer, labels,
+    eval_dataset = get_ds_features(args, eval_examples, tokenizer, labels,
                                pad_token_label_id)
 
     # accelerate evaluation speed
-    args.eval_batch_size = 128
+    args.eval_batch_size = 256
     eval_sampler = SequentialSampler(eval_dataset)
     eval_dataloader = DataLoader(eval_dataset,
                                  sampler=eval_sampler,
