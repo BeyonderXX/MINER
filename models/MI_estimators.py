@@ -207,7 +207,15 @@ class InfoNCE(nn.Module):
         # compute the negative loss (maximise loss == minimise -loss)
         return lower_bound
 
-    def mi_loss(self, encode_out, bert_embed, labels):
+    def contrast_forward(self, x_samples, pos_samples, neg_samples):
+        pos_scores = self.F_func(torch.cat([x_samples, pos_samples], dim=-1))
+        neg_scores = self.F_func(torch.cat([x_samples, neg_samples], dim=-1))
+
+        log_likely = pos_scores - (pos_scores.exp() + neg_scores.exp()).log()
+
+        return -1 * log_likely.sum()
+
+    def old_context_loss(self, encode_out, bert_embed, labels):
         """
 
         :param encode_out: (bsz, seq_len, embed)
@@ -290,7 +298,7 @@ class InfoNCE(nn.Module):
         return mi_losses
 
 
-def kl_div(param1, param2):
+def norm_kl_div(param1, param2):
     """
     Calculates the KL divergence between a categorical distribution and a
     uniform categorical distribution.

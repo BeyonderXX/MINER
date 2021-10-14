@@ -39,6 +39,113 @@ TOKENIZER_ARGS = ["do_lower_case", "strip_accents", "keep_accents", "use_fast"]
 trans_list = ["CrossCategory", "EntityTyposSwap", "OOV"]
 
 
+def get_args():
+    parser = arg_parse()
+
+    # Required parameters
+    parser.add_argument(
+        "--data_dir",
+        default="/root/RobustNER/data/conll2003/origin/",
+        # default="/root/RobustNER/data/debug/",
+        type=str,
+        help="The input data dir. Should contain the training files for the "
+             "CoNLL-2003 NER task.",
+    )
+    parser.add_argument(
+        "--output_dir",
+        default="/root/RobustNER/out/bert_uncase/debug/",
+        type=str,
+        help="The output directory where the model predictions and "
+             "checkpoints will be written.",
+    )
+
+    parser.add_argument(
+        "--mode", default='bn', type=str,
+        help="bn for information bottleneck, oov for out of distribution, "
+             "cc for cross category."
+    )
+
+    # Other parameters
+    parser.add_argument("--gpu_id", default=3, type=int,
+                        help="GPU number id")
+
+    parser.add_argument(
+        "--epoch", default=10, type=float,
+        help="Total number of training epochs to perform."
+    )
+
+    parser.add_argument(
+        "--hidden_dim", default=50, type=int,
+        help="bottleneck encoder out dim"
+    )
+
+    parser.add_argument(
+        "--beta", default=0, type=float,
+        help="weights of p(z|v) norm regular, 0 represents not use"
+    )
+
+    parser.add_argument(
+        "--mi_estimator", default='VIB', type=str,
+        help="MI estimator for I(X;Z), support VIB, CLUB"
+    )
+
+    # I(Z; Y) parameters
+    parser.add_argument(
+        "--sample_size", default=5, type=int,
+        help="sample num from p(z|x)"
+    )
+
+    parser.add_argument(
+        "--alpha", default=1e-3, type=float,
+        help="weights of kl div of p(y|v) and p(y|z)"
+    )
+
+    parser.add_argument(
+        "--gama", default=1e-3, type=float,
+        help="weights of oov regular"
+    )
+
+    parser.add_argument(
+        "--theta", default=1e-3, type=float,
+        help="weights of cross category regular"
+    )
+
+    # negative sample build mode
+    parser.add_argument(
+        "--rep_mode", default="typos",
+        help="which strategy to replace entity, support typos and ngram now."
+    )
+
+    parser.add_argument(
+        "--pmi_json", default='/root/RobustNER/data/conll2003/pmi.json'
+    )
+    parser.add_argument(
+        "--pmi_preserve", default=0.3, type=float,
+        help="what extent of PMI ranking subword preserve."
+    )
+
+    # training parameters
+    parser.add_argument("--batch_size", default=64, type=int,
+                        help="Batch size per GPU/CPU for training.")
+
+    parser.add_argument("--do_train", action="store_true",
+                        help="Whether to run training.")
+    parser.add_argument("--do_eval", action="store_true",
+                        help="Whether to run eval on the dev set.")
+    parser.add_argument("--do_predict", action="store_true",
+                        help="Whether to run predictions on the test set.")
+    parser.add_argument("--do_robustness_eval", action="store_true",
+                        help="Whether to evaluate robustness")
+
+    parser.add_argument(
+        "--evaluate_during_training",
+        default=True,
+        help="Whether to run evaluation during training at each logging step.",
+    )
+
+    return arg_process(parser.parse_args())
+
+
 def train(args, model, tokenizer, labels, pad_token_label_id):
     """ Train the model """
     train_examples = load_and_cache_examples(args, mode="train")
@@ -84,39 +191,27 @@ def train(args, model, tokenizer, labels, pad_token_label_id):
         for step, batch in enumerate(epoch_iterator):
             model.train()
             batch = tuple(t.to(args.device) for t in batch)
-            # mask training
-            # inputs = {"input_ids": batch[0],
-            #           "attention_mask": batch[1],
-            #           "valid_mask": batch[2],
-            #           "token_type_ids": batch[3],
-            #           "labels": batch[4]
-            #           }
+            inputs = {
+                'origin_features': {
+                    "input_ids": batch[0],
+                    "attention_mask": batch[1],
+                    "valid_mask": batch[2],
+                    "token_type_ids": batch[3],
+                    "labels": batch[4]
+                }
+            }
 
-            # best ckpt just noise training
-            # inputs = {"input_ids": batch[5],
-            #           "attention_mask": batch[6],
-            #           "valid_mask": batch[7],
-            #           "token_type_ids": batch[8],
-            #           "labels": batch[4],
-            #
-            #           "trans_input_ids": batch[5],
-            #           "trans_attention_mask": batch[6],
-            #           "trans_valid_mask": batch[7],
-            #           "trans_token_type_ids": batch[8],
-            #           }
+            if args.mode == 'oov':
+                inputs['switched_features'] = {
+                    "input_ids": batch[5],
+                    "attention_mask": batch[6],
+                    "valid_mask": batch[7],
+                    "token_type_ids": batch[8],
+                    "labels": batch[9]
+                }
 
-            # typos constraint training
-            inputs = {"input_ids": batch[0],
-                      "attention_mask": batch[1],
-                      "valid_mask": batch[2],
-                      "token_type_ids": batch[3],
-                      "labels": batch[4],
-
-                      "trans_input_ids": batch[5],
-                      "trans_attention_mask": batch[6],
-                      "trans_valid_mask": batch[7],
-                      "trans_token_type_ids": batch[8],
-                      }
+            if args.mode not in ['bn', 'oov']:
+                raise Exception('Unsupported mode {}'.format(args.mode))
 
             outputs = model(**inputs)
             loss_dic = outputs[0]
@@ -174,6 +269,7 @@ def train(args, model, tokenizer, labels, pad_token_label_id):
 def evaluate(args, model, tokenizer, labels, pad_token_label_id, mode,
              prefix='', data_dir=None):
     eval_examples = load_and_cache_examples(args, mode=mode, data_dir=data_dir)
+
     eval_dataset = get_ds_features(args, eval_examples, tokenizer, labels,
                                pad_token_label_id)
 
@@ -196,15 +292,17 @@ def evaluate(args, model, tokenizer, labels, pad_token_label_id, mode,
         batch = tuple(t.to(args.device) for t in batch)
 
         with torch.no_grad():
-            inputs = {"input_ids": batch[0],
-                      "attention_mask": batch[1],
-                      "valid_mask": batch[2],
-                      # RoBERTa don"t use segment_ids
-                      "token_type_ids": batch[3],
-                      "decode": True
-                      }
+            inputs = {
+                "origin_features": {
+                    "input_ids": batch[0],
+                    "attention_mask": batch[1],
+                    "valid_mask": batch[2],
+                    "token_type_ids": batch[3],
+
+                }
+            }
             # without labels, direct out tags
-            outputs = model(**inputs)
+            outputs = model(decode=True, **inputs)
             tags = outputs[0]
 
         nb_eval_steps += 1
@@ -318,126 +416,6 @@ def fast_evaluate(args, ckpt_dir, tokenizer_args, labels, pad_token_label_id,
     return results, predictions
 
 
-# main parameters
-def get_args():
-    parser = arg_parse()
-
-    # Required parameters
-    parser.add_argument(
-        "--data_dir",
-        default="/root/RobustNER/data/conll2003/origin/",
-        # default="/root/RobustNER/data/debug/",
-        type=str,
-        help="The input data dir. Should contain the training files for the "
-             "CoNLL-2003 NER task.",
-    )
-    parser.add_argument(
-        "--output_dir",
-        default="/root/RobustNER/out/bert_uncase/debug/",
-        type=str,
-        help="The output directory where the model predictions and "
-             "checkpoints will be written.",
-    )
-    # Other parameters
-    parser.add_argument("--gpu_id", default=0, type=int,
-                        help="GPU number id")
-
-    parser.add_argument(
-        "--epoch", default=10, type=float,
-        help="Total number of training epochs to perform."
-    )
-    parser.add_argument(
-        "--hidden_dim", default=300, type=int,
-        help="post encoder out dim"
-    )
-
-    # I(Z; context) parameters
-    parser.add_argument("--regular_context", action="store_false",
-                        help="Whether add I(z, context) regular.")
-
-    parser.add_argument("--theta", default=1e-4, type=float,
-                        help="theta params")
-
-    # I(X; Z) parameters
-    parser.add_argument("--regular_z", action="store_false",
-                        help="Whether add I(x, z) regular.")
-
-    parser.add_argument("--regular_norm", action="store_false",
-                        help="Whether add I(z|x, N) regular.")
-
-    parser.add_argument(
-        "--beta", default=5e-5, type=float,
-        help="beta params."
-    )
-
-    parser.add_argument(
-        "--mi_estimator", default='VIB', type=str,
-        help="MI estimator for I(X;Z), support VIB, CLUB"
-    )
-
-    # I(Z; Y) parameters
-    parser.add_argument(
-        "--sample_size", default=5, type=int,
-        help="sample num from p(z|x)"
-    )
-
-    # I(X_i ; Z_i | Z_(j!=i))
-    parser.add_argument(
-        "--regular_entity", action="store_false",
-        help="whether add entity regular item."
-    )
-
-    parser.add_argument(
-        "--gama", default=1e-3, type=float,
-        help="gama params."
-    )
-
-    parser.add_argument(
-        "--entity_mi_estimator", default='vCLUB', type=str,
-        help="MI estimator for entity and its encoding representation"
-    )
-
-    # context
-
-    # negative sample build mode
-    parser.add_argument(
-        "--rep_mode", default="typos",
-        help="which strategy to replace entity, support typos and ngram now."
-    )
-    parser.add_argument(
-        "--rep_total", action="store_false",
-        help="whether replace full entity token or its subword."
-    )
-    parser.add_argument(
-        "--pmi_json", default='/root/RobustNER/data/conll2003/pmi.json'
-    )
-    parser.add_argument(
-        "--pmi_preserve", default=0.2, type=float,
-        help="what extent of PMI ranking subword preserve."
-    )
-
-    # training parameters
-    parser.add_argument("--batch_size", default=64, type=int,
-                        help="Batch size per GPU/CPU for training.")
-
-    parser.add_argument("--do_train", action="store_true",
-                        help="Whether to run training.")
-    parser.add_argument("--do_eval", action="store_true",
-                        help="Whether to run eval on the dev set.")
-    parser.add_argument("--do_predict", action="store_true",
-                        help="Whether to run predictions on the test set.")
-    parser.add_argument("--do_robustness_eval", action="store_true",
-                        help="Whether to evaluate robustness")
-
-    parser.add_argument(
-        "--evaluate_during_training",
-        default=True,
-        help="Whether to run evaluation during training at each logging step.",
-    )
-
-    return arg_process(parser.parse_args())
-
-
 def main():
     args = get_args()
     set_seed(args) # Added here for reproductibility
@@ -463,8 +441,7 @@ def main():
         num_labels=num_labels,
         id2label={str(i): label for i, label in enumerate(labels)},
         label2id={label: i for i, label in enumerate(labels)},
-        cache_dir=None,
-        output_hidden_states=True
+        cache_dir=None
     )
 
     #####

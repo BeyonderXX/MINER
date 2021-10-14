@@ -201,3 +201,9 @@ nohup python main.py --gpu_id 1 --output_dir /root/RobustNER/out/mask_full_bert/
 # 对比样本loss
 nohup python main.py --gpu_id 0 --output_dir /root/RobustNER/out/typos_mse/ --epoch 50 --baseline --regular_context --regular_z --regular_norm --rep_total --pmi_preserve 0.3 --rep_mode typos --batch_size 64 --do_train --do_eval --do_predict --do_robustness_eval > typos_mse.log 2>&1 &
 nohup python main.py --gpu_id 1 --output_dir /root/RobustNER/out/typos_cos/ --epoch 50 --gama 1e-2 --baseline --regular_context --regular_z --regular_norm --rep_total --pmi_preserve 0.3 --rep_mode typos --batch_size 50 --do_train --do_eval --do_predict --do_robustness_eval > typos_cos.log 2>&1 &
+
+
+# --------------- v2 ----------------
+nohup python main.py --gpu_id 1 --output_dir /root/RobustNER/out/bn_1e2/ --epoch 50 --alpha 1e-2 --rep_mode typos --batch_size 128 --do_train --do_eval --do_predict --do_robustness_eval > bn_1e2.log 2>&1 &
+
+nohup python main.py --gpu_id 3 --output_dir /root/RobustNER/out/oov_1e1/ --mode oov --gama 1e-1 --epoch 50 --rep_mode typos --batch_size 64 --do_train --do_eval --do_predict --do_robustness_eval > oov_1e1.log 2>&1 &

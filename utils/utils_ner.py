@@ -220,7 +220,7 @@ def convert_examples_to_features(
         if index < 1:
             log_example(
                 *feature,
-                prefix="\n{0} example {1} feature".format(log_prefix, index)
+                prefix="{0} example {1} feature".format(log_prefix, index)
             )
 
         features.append(

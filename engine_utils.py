@@ -1,7 +1,6 @@
 import numpy as np
 import torch
 import random
-import string
 import os
 import logging
 import argparse
@@ -149,18 +148,14 @@ def prepare_optimizer_scheduler(args, model, training_steps):
     no_decay = ["bias", "LayerNorm.weight"]
 
     bert_parameters = eval('model.{}'.format(args.model_type)).named_parameters()
-    crf_parameters = model.decoder.named_parameters()
-    other_parameters = list(model.classifier.named_parameters()) \
+    crf_parameters = list(model.z_decoder.named_parameters()) \
+                     + list(model.v_decoder.named_parameters())
 
-
-    if not args.baseline:
-        other_parameters = other_parameters \
-                           + list(model.entity_regularizer.named_parameters())\
-                           + [("r_mean", model.r_mean)] + [("r_log_var", model.r_log_var)] \
-                           + list(model.post_encoder.named_parameters())
-
-        # 加入 context regular 参数
-        other_parameters += list(model.context_regularizer.named_parameters())
+    other_parameters = list(model.z_classifier.named_parameters()) \
+                       + list(model.v_classifier.named_parameters()) \
+                       + list(model.bn_encoder.named_parameters()) \
+                       + list(model.oov_reg.named_parameters()) \
+                       + list(model.cross_category_reg.named_parameters())
 
     args.bert_lr = args.bert_lr if args.bert_lr else args.learning_rate
     args.classifier_lr = args.classifier_lr if args.classifier_lr else args.learning_rate
@@ -176,13 +171,10 @@ def prepare_optimizer_scheduler(args, model, training_steps):
          "lr": args.classifier_lr},
 
         # bert params
-        {"params": [p for n, p in bert_parameters if
-                    not any(nd in n for nd in no_decay)],
+        {"params": [p for n, p in bert_parameters if not any(nd in n for nd in no_decay)],
          "weight_decay": args.weight_decay,
          "lr": args.bert_lr},
-
-        {"params": [p for n, p in bert_parameters if
-                    any(nd in n for nd in no_decay)],
+        {"params": [p for n, p in bert_parameters if any(nd in n for nd in no_decay)],
          "weight_decay": 0.0,
          "lr": args.bert_lr},
 
@@ -194,7 +186,6 @@ def prepare_optimizer_scheduler(args, model, training_steps):
          "weight_decay": 0.0,
          "lr": args.crf_lr},
     ]
-
 
     optimizer = AdamW(optimizer_grouped_parameters, lr=args.learning_rate, eps=args.adam_epsilon)
     scheduler = get_linear_schedule_with_warmup(
@@ -225,20 +216,43 @@ def load_and_cache_examples(args, mode, data_dir=None):
 
 # 获取原来数据集和负样本数据集特征
 def get_ds_features(args, examples, tokenizer, labels, pad_token_label_id):
-    # input_ids, input_mask, valid_mask, segment_ids, label_ids
-    features = dataset_2_features(args, examples, tokenizer, labels, pad_token_label_id)
+    if args.mode == 'bn':
+        # input_ids, input_mask, valid_mask, segment_ids, label_ids
+        features = dataset_2_features(args, examples, tokenizer, labels,
+                                      pad_token_label_id)
+    elif args.mode == 'oov':
+        # input_ids, input_mask, valid_mask, segment_ids, label_ids
+        features = dataset_2_features(args, examples, tokenizer, labels,
+                                      pad_token_label_id)
+        # TODO
+        neg_examples = build_typos_neg_examples(examples, tokenizer,
+                                                pmi_json=args.pmi_json)
+        neg_features = dataset_2_features(args, neg_examples, tokenizer, labels,
+                                          pad_token_label_id,
+                                          log_prefix='negative')
+        features += neg_features
+    elif args.mode == 'cc':
+        # input_ids, input_mask, valid_mask, segment_ids, label_ids
+        features = dataset_2_features(args, examples, tokenizer, labels,
+                                      pad_token_label_id)
+        # TODO
+        pos_examples, neg_examples = build_cc_features(examples, tokenizer)
+        pos_features = dataset_2_features(args, pos_examples, tokenizer, labels,
+                                          pad_token_label_id,
+                                          log_prefix='negative')
+        neg_features = dataset_2_features(args, neg_examples, tokenizer, labels,
+                                          pad_token_label_id,
+                                          log_prefix='negative')
+        features = features + pos_features + neg_features
+    else:
+        raise Exception('Unsupport mode {}'.format(args.mode))
 
-    neg_examples = build_typos_neg_examples(examples, tokenizer,
-                                            neg_total=args.rep_total,
-                                            neg_mode=args.rep_mode,
-                                            pmi_json=args.pmi_json,
-                                            preserve_ratio=args.pmi_preserve)
-    neg_features = dataset_2_features(args, neg_examples, tokenizer, labels, pad_token_label_id, log_prefix='negative')
+    return TensorDataset(*features)
 
-    return TensorDataset(
-        *features,
-        *neg_features
-    )
+
+# 按照实体是否为
+def build_cc_features(examples, tokenizer):
+    return None, None
 
 
 # 获取 mask 机制模型数据集特征
@@ -250,9 +264,7 @@ def get_mask_ds_features(args, examples, tokenizer, labels, pad_token_label_id):
                                               preserve_ratio=args.pmi_preserve)
     features = dataset_2_features(args, masked_examples, tokenizer, labels,
                                   pad_token_label_id)
-    return TensorDataset(
-        *features
-    )
+    return TensorDataset(*features)
 
 
 def dataset_2_features(args, examples, tokenizer, labels, pad_token_label_id, log_prefix=''):
