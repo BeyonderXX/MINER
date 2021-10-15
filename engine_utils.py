@@ -216,14 +216,14 @@ def load_and_cache_examples(args, mode, data_dir=None):
 
 # 获取原来数据集和负样本数据集特征
 def get_ds_features(args, examples, tokenizer, labels, pad_token_label_id):
-    if args.mode == 'bn':
+    if args.mode in ['bn', 'oov']:
         # input_ids, input_mask, valid_mask, segment_ids, label_ids
         features = dataset_2_features(args, examples, tokenizer, labels,
                                       pad_token_label_id)
-    elif args.mode == 'oov':
-        # input_ids, input_mask, valid_mask, segment_ids, label_ids
-        features = dataset_2_features(args, examples, tokenizer, labels,
-                                      pad_token_label_id)
+    # elif args.mode == 'oov':
+    #     # input_ids, input_mask, valid_mask, segment_ids, label_ids
+    #     features = dataset_2_features(args, examples, tokenizer, labels,
+    #                                   pad_token_label_id)
         # TODO
         neg_examples = build_typos_neg_examples(examples, tokenizer,
                                                 pmi_json=args.pmi_json)

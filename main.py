@@ -66,7 +66,7 @@ def get_args():
     )
 
     # Other parameters
-    parser.add_argument("--gpu_id", default=3, type=int,
+    parser.add_argument("--gpu_id", default=6, type=int,
                         help="GPU number id")
 
     parser.add_argument(
@@ -198,17 +198,15 @@ def train(args, model, tokenizer, labels, pad_token_label_id):
                     "valid_mask": batch[2],
                     "token_type_ids": batch[3],
                     "labels": batch[4]
-                }
-            }
-
-            if args.mode == 'oov':
-                inputs['switched_features'] = {
+                },
+                'switched_features': {
                     "input_ids": batch[5],
                     "attention_mask": batch[6],
                     "valid_mask": batch[7],
                     "token_type_ids": batch[8],
                     "labels": batch[9]
                 }
+            }
 
             if args.mode not in ['bn', 'oov']:
                 raise Exception('Unsupported mode {}'.format(args.mode))

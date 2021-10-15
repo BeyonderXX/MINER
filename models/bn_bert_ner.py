@@ -62,20 +62,27 @@ class BertCrfWithBN(BertPreTrainedModel):
         """
         assert 'origin_features' in kwargs
 
-        if self.mode == 'bn':
+        if self.mode in ['bn', 'oov']:
             # training (loss, logits), testing (tags)
-            outputs = self.information_bottleneck_opt(
+            outputs = self.bn_oov_opt(
                 kwargs['origin_features'],
+                kwargs.get('switched_features', None),
                 decode=decode
             )
-        elif self.mode == 'oov':
-            switched_feas = kwargs.get('switched_features', None)
-            # training (loss, logits), testing (tags)
-            outputs = self.oov_opt(
-                kwargs['origin_features'],
-                entity_switched_features=switched_feas,
-                decode=decode
-            )
+        # if self.mode == 'bn':
+        #     # training (loss, logits), testing (tags)
+        #     outputs = self.information_bottleneck_opt(
+        #         kwargs['origin_features'],
+        #         decode=decode
+        #     )
+        # elif self.mode == 'oov':
+        #     switched_feas = kwargs.get('switched_features', None)
+        #     # training (loss, logits), testing (tags)
+        #     outputs = self.oov_opt(
+        #         kwargs['origin_features'],
+        #         entity_switched_features=switched_feas,
+        #         decode=decode
+        #     )
         elif self.mode == 'cc':
             pos_feas = kwargs.get('positive_features', None)
             neg_feas = kwargs.get('negative_features', None)
@@ -222,6 +229,99 @@ class BertCrfWithBN(BertPreTrainedModel):
             # todo, add I(z1, z2)
             entity_mi = self.oov_reg.update(
                 ori_outputs['v'], switched_outputs['v']
+            )
+            loss_dic['oov'] = self.gama * entity_mi
+            loss_dic['loss'] = sum([item[1] for item in loss_dic.items()])
+            outputs = (loss_dic,) + outputs
+
+        return outputs  # (loss), scores
+
+    def bn_oov_opt(
+            self,
+            origin_features,
+            entity_switched_features=None,
+            decode=False
+    ):
+        """
+        默认有 labels 为 train, 无 labels 为 test
+
+        """
+
+        v_outputs = self.label_predict(
+            **origin_features, v_predict=True
+        )
+
+        # p(t|x) 假设符合高斯分布
+        attention_mask = origin_features['attention_mask']
+        # TODO, add sample mechanism
+        mean, log_var = self.bn_encoder.get_mu_logvar(v_outputs['v'])
+        bsz, seqlen, _ = mean.shape
+
+        if 'labels' in origin_features:  # training
+            # (bsz * sample_size, seq_len, tag_dim)
+            z = mean
+            ex_labels = origin_features['labels'].unsqueeze(1) \
+                .repeat(1, self.sample_size, 1) \
+                .view(bsz * self.sample_size, seqlen)
+
+            attention_mask = origin_features['attention_mask'].unsqueeze(1) \
+                .repeat(1, self.sample_size, 1). \
+                view(bsz * self.sample_size, seqlen)
+        else:  # testing
+            z = mean
+
+        logits = self.z_classifier(z)
+
+        if decode:
+            tags = self.z_decoder.decode(logits, attention_mask)
+            outputs = (tags,)
+        else:
+            outputs = (logits,)
+
+        if 'labels' in origin_features:
+            kl_v_z = self.alpha * F.kl_div(logits.softmax(dim=-1).log(),
+                                           v_outputs['logits'].softmax(dim=-1),
+                                           reduction='sum')
+            loss_dic = {'kl_v_z': kl_v_z}
+
+            # labels 第0个 必须为 'O'
+            ex_labels = torch.where(ex_labels >= 0, ex_labels,
+                                    torch.zeros_like(ex_labels))
+            decoder_log_likely = self.z_decoder(
+                emissions=logits, tags=ex_labels, mask=attention_mask,
+            )
+            # first item loss
+            loss_dic['z_crf'] = -1 * decoder_log_likely
+            loss_dic['v_crf'] = v_outputs['loss']
+
+            # reg p(z|x) to N(0,1)
+            if self.beta > 0:
+                kl_encoder = kl_norm(mean, log_var)
+                loss_dic['norm'] = self.get_beta() * kl_encoder
+
+            assert entity_switched_features is not None
+
+            switched_outputs = self.label_predict(
+                **entity_switched_features, decode=decode, v_predict=True
+            )
+            switch_mean, switch_log_var = self.bn_encoder.get_mu_logvar(switched_outputs['v'])
+
+            loss_dic['s_v_crf'] = switched_outputs['loss']
+            switch_logits = self.z_classifier(switch_mean)
+            switch_labels = torch.where(entity_switched_features['labels'] >= 0,
+                                        entity_switched_features['labels'],
+                                        torch.zeros_like(entity_switched_features['labels']))
+
+            switch_decoder_log_likely = self.z_decoder(
+                emissions=switch_logits,
+                tags=switch_labels,
+                mask=entity_switched_features['attention_mask']
+            )
+            loss_dic['s_z_crf'] = -1 * switch_decoder_log_likely
+
+            # todo, add I(z1, z2)
+            entity_mi = self.oov_reg.update(
+                z, switch_mean
             )
             loss_dic['oov'] = self.gama * entity_mi
             loss_dic['loss'] = sum([item[1] for item in loss_dic.items()])
