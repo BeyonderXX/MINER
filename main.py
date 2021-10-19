@@ -23,7 +23,7 @@ from torch.nn import CrossEntropyLoss
 from torch.utils.data import DataLoader, RandomSampler, SequentialSampler
 from tqdm import tqdm, trange
 from transformers import AutoConfig, AutoTokenizer
-
+from eval_metric import span_f1,span_f1_prune,get_predict,get_predict_prune
 from models.model_ner import AutoModelForCrfNer
 
 from utils.utils_ner import get_labels, collate_fn
@@ -36,37 +36,21 @@ except ImportError:
 
 
 TOKENIZER_ARGS = ["do_lower_case", "strip_accents", "keep_accents", "use_fast"]
-trans_list = ["CrossCategory", "EntityTyposSwap", "OOV", "ToLonger"]
+trans_list = ["CrossCategory", "EntityTyposSwap", "OOV"]
 
 
 def train(args, model, tokenizer, labels, pad_token_label_id):
     """ Train the model """
     train_examples = load_and_cache_examples(args, mode="train")
-
-    # optimize I(x_e;y_e|x!=e)
-    if args.regular_entity:
-        trans_examples = build_neg_samples(train_examples, mode=args.rep_mode)
-        train_dataset = get_dataset(args, trans_examples, tokenizer, labels,
-                                    pad_token_label_id,
-                                    trans_examples=trans_examples)
-    else:
-        train_dataset = get_dataset(args, train_examples, tokenizer, labels,
-                                    pad_token_label_id)
-
     tb_writer = SummaryWriter(args.output_dir)
-    train_sampler = RandomSampler(train_dataset)
-    train_dataloader = DataLoader(train_dataset,
-                                  sampler=train_sampler,
-                                  batch_size=args.batch_size,
-                                  collate_fn=collate_fn)
-    training_steps = len(train_dataloader) * args.epoch
+    training_steps = (len(train_examples) - 1 / args.epoch + 1) * args.epoch
 
     # Prepare optimizer and schedule (linear warmup and decay)
     optimizer, scheduler = prepare_optimizer_scheduler(args, model, training_steps)
 
     # Train!
     logger.info("***** Running training *****")
-    logger.info("  Num examples = %d", len(train_dataset))
+    logger.info("  Num examples = %d", len(train_examples))
     logger.info("  Num Epochs = %d", args.epoch)
     logger.info("  Total train batch size = %d", args.batch_size)
     logger.info("  Total optimization steps = %d", training_steps)
@@ -76,43 +60,81 @@ def train(args, model, tokenizer, labels, pad_token_label_id):
     tr_loss, logging_loss = 0.0, 0.0
     model.zero_grad()
     train_iterator = trange(int(args.epoch), desc="Epoch")
+    epoch_num = 0
 
     for _ in train_iterator:
+        epoch_num += 1
+        # input_ids, input_mask, valid_mask, segment_ids, label_ids
+        # neg(input_ids, input_mask, valid_mask, segment_ids, label_ids)
+        train_dataset = get_ds_features(args, train_examples, tokenizer,
+                                        labels, pad_token_label_id)
+
+        # mask mode
+        # train_dataset = get_mask_ds_features(args, train_examples, tokenizer,
+        #                                      labels, pad_token_label_id)
+
+        train_sampler = RandomSampler(train_dataset)
+        train_dataloader = DataLoader(train_dataset,
+                                      sampler=train_sampler,
+                                      batch_size=args.batch_size,
+                                      collate_fn=collate_fn)
+        logger.info("Training epoch num {0}".format(epoch_num))
         epoch_iterator = tqdm(train_dataloader, desc="Iteration")
 
         for step, batch in enumerate(epoch_iterator):
             model.train()
             batch = tuple(t.to(args.device) for t in batch)
-            if args.regular_entity:
-                inputs = {"input_ids": batch[0],
-                          "attention_mask": batch[1],
-                          "valid_mask": batch[2],
-                          "token_type_ids": batch[3],
-                          "labels": batch[4],
+            # for ind in batch:
+            #     print(ind)
+            # typos constraint training
+            
+            # pos batch:
+            # 0all_input_ids, 1all_input_mask, 2all_valid_mask, 3all_segment_ids, 4all_label_ids, 
+            # 5all_span_idxs_ltoken, 6morph_idxs, 7span_label_ltoken, 8all_span_lens, 
+            # 9all_span_weights, 10real_span_mask_ltoken, 11all_span_idxs
+    
+            # neg batch:
+            # 12all_input_ids, 13all_input_mask, 14all_valid_mask, 15all_segment_ids, 16all_label_ids, 
+            # 17all_span_idxs_ltoken, 18morph_idxs, 19span_label_ltoken, 20all_span_lens, 
+            # 21all_span_weights, 22real_span_mask_ltoken, 23all_span_idxs
+            inputs = {"input_ids": batch[0],
+                      "attention_mask": batch[1],
+                      "valid_mask": batch[2],
+                      "token_type_ids": batch[3],
+                      "labels": batch[4],
 
-                          "trans_input_ids": batch[5],
-                          "trans_attention_mask": batch[6],
-                          "trans_valid_mask": batch[7],
-                          "trans_token_type_ids": batch[8],
-                          "trans_labels": batch[9],
-                          }
-            else:
-                inputs = {"input_ids": batch[0],
-                          "attention_mask": batch[1],
-                          "valid_mask": batch[2],
-                          # RoBERTa don"t use segment_ids
-                          "token_type_ids": batch[3],
-                          "labels": batch[4]
-                          }
+                      "trans_input_ids": batch[12],
+                      "trans_attention_mask": batch[13],
+                      "trans_valid_mask": batch[14],
+                      "trans_token_type_ids": batch[15],
+
+                      "span_idxs_ltoken": batch[5],
+                      "morph_idxs": batch[6],
+                      "span_label_ltoken": batch[7],
+                      "span_lens": batch[8],
+                      "span_weights": batch[9],
+                      "real_span_mask_ltoken": batch[10],
+                    #   "span_idxs": batch[11],
+
+                      "trans_span_idxs_ltoken": batch[17],
+                      "trans_morph_idxs": batch[18],
+                      "trans_span_label_ltoken": batch[19],
+                      "trans_span_lens": batch[20],
+                      "trans_span_weights": batch[21],
+                      "trans_real_span_mask_ltoken": batch[22],
+                    #   "trans_span_idxs": batch[23]
+                      }
 
             outputs = model(**inputs)
-            loss = outputs[0]
+            # loss_dic = outputs[0]
+            loss = outputs['loss']
             loss.backward()
 
             fitlog.add_loss(loss.tolist(), name="Loss", step=global_step)
-
             tr_loss += loss.item()
-            epoch_iterator.set_description('Loss: {}'.format(round(loss.item(), 6)))
+            # description = "".join(["{0}:{1}, ".format(k, round(v.item(), 3)) for k, v in loss_dic.items()]).strip(', ')
+
+            # epoch_iterator.set_description(description)
             # clip gradients
             torch.nn.utils.clip_grad_norm_(model.parameters(), args.max_grad_norm)
 
@@ -127,16 +149,29 @@ def train(args, model, tokenizer, labels, pad_token_label_id):
                 logging_loss = tr_loss
 
                 if args.evaluate_during_training:
-                    results, _ = evaluate(args, model, tokenizer, labels, pad_token_label_id, mode="dev",
-                                          prefix=global_step)
-                    for key, value in results.items():
-                        if isinstance(value, float) or isinstance(value, int):
-                            tb_writer.add_scalar("eval_{}".format(key), value, global_step)
+                    results, dev_outputs = evaluate(args, model, tokenizer, labels, pad_token_label_id, mode="dev",
+                                          prefix="{}".format(global_step))
+                    weighted_score = results['span_f1']
 
-                    if best_score < results['f1']:
-                        best_score = results['f1']
+                    # TODO, add dev mode
+                    if args.do_robustness_eval and epoch_num > 5:
+                        robust_f1 = robust_evaluate(args, args.output_dir, None, labels,
+                            pad_token_label_id, prefix="{}".format(global_step), model=model, tokenizer=tokenizer)
+                        # select best ckpt base weighted f1 score
+                        weighted_score = 0.35 * results['span_f1'] + 0.65 * robust_f1
+                    else:
+                        weighted_score *= weighted_score
+
+                    # for key, value in results.items():
+                    #     if isinstance(value, float) or isinstance(value, int):
+                    #         tb_writer.add_scalar("eval_{}".format(key), value, global_step)
+
+                    if best_score < weighted_score:
+                        best_score = weighted_score
                         output_dir = os.path.join(args.output_dir, "best_checkpoint")
-                        model_save(args, output_dir, model, tokenizer)
+                    else:
+                        output_dir = args.output_dir
+                    model_save(args, output_dir, model, tokenizer)
 
     tb_writer.close()
 
@@ -146,14 +181,16 @@ def train(args, model, tokenizer, labels, pad_token_label_id):
 def evaluate(args, model, tokenizer, labels, pad_token_label_id, mode,
              prefix='', data_dir=None):
     eval_examples = load_and_cache_examples(args, mode=mode, data_dir=data_dir)
-    eval_dataset = get_dataset(args, eval_examples, tokenizer, labels,
-                                pad_token_label_id)
+    eval_dataset = get_ds_features(args, eval_examples, tokenizer, labels,
+                               pad_token_label_id)
 
-    args.eval_batch_size = args.batch_size
+    # accelerate evaluation speed
+    args.eval_batch_size = 256
     eval_sampler = SequentialSampler(eval_dataset)
     eval_dataloader = DataLoader(eval_dataset,
                                  sampler=eval_sampler,
-                                 batch_size=args.eval_batch_size)
+                                 batch_size=args.eval_batch_size,
+                                 collate_fn=collate_fn)
 
     logger.info("***** Running evaluation {0} {1} *****".format(mode, prefix))
     logger.info("  Num examples = %d", len(eval_dataset))
@@ -161,6 +198,7 @@ def evaluate(args, model, tokenizer, labels, pad_token_label_id, mode,
     nb_eval_steps = 0
     preds = None
     trues = None
+    dev_outputs = []
     model.eval()
 
     for batch in tqdm(eval_dataloader, desc="Evaluating"):
@@ -172,75 +210,122 @@ def evaluate(args, model, tokenizer, labels, pad_token_label_id, mode,
                       "valid_mask": batch[2],
                       # RoBERTa don"t use segment_ids
                       "token_type_ids": batch[3],
+                      "span_idxs_ltoken": batch[5],
+                      "morph_idxs": batch[6],
+                      "span_label_ltoken": batch[7],
+                      "span_lens": batch[8],
+                      "span_weights": batch[9],
+                      "real_span_mask_ltoken": batch[10],
+
                       "decode": True
                       }
+            # without labels, direct out tags
             outputs = model(**inputs)
-            tags = outputs[0]
+            pred = outputs['pred']
+            # span_f1_prune(all_span_idxs, predicts, span_label_ltoken, real_span_mask_ltoken)
+            span_f1s,pred_label_idx = span_f1_prune(
+                batch[11], 
+                pred, 
+                batch[7], 
+                batch[10])
+            outputs['span_f1s'] = span_f1s
+            outputs['pred_label_idx'] = pred_label_idx
+            outputs['all_span_idxs'] = batch[11]
+            outputs['span_label_ltoken'] = batch[7]
 
+            # batch_preds = get_predict_prune(self.args, all_span_word, words, pred_label_idx, batch[7],
+            #                                    batch[11])
+            # outputs["batch_preds"] =batch_preds        
+            # outputs['all_span_word'] = all_span_word
+            dev_outputs.append(outputs)
+            
         nb_eval_steps += 1
 
-        if preds is None:
-            preds = tags.detach().cpu().numpy()
-            trues = batch[4].detach().cpu().numpy()
-        else:
-            preds = np.append(preds, tags.detach().cpu().numpy(), axis=0)
-            trues = np.append(trues, batch[4].detach().cpu().numpy(), axis=0)
+        # if preds is None:
+        #     preds = tags.detach().cpu().numpy()
+        #     trues = batch[4].detach().cpu().numpy()
+        # else:
+        #     preds = np.append(preds, tags.detach().cpu().numpy(), axis=0)
+        #     trues = np.append(trues, batch[4].detach().cpu().numpy(), axis=0)
 
-    label_map = {i: label for i, label in enumerate(labels)}
-    trues_list = [[] for _ in range(trues.shape[0])]
-    preds_list = [[] for _ in range(preds.shape[0])]
+    all_counts = torch.stack([x[f'span_f1s'] for x in dev_outputs]).sum(0)
+    correct_pred, total_pred, total_golden = all_counts
+    print('correct_pred, total_pred, total_golden: ', correct_pred, total_pred, total_golden)
+    precision =correct_pred / (total_pred+1e-10)
+    recall = correct_pred / (total_golden + 1e-10)
+    f1 = precision * recall * 2 / (precision + recall + 1e-10)
 
-    for i in range(trues.shape[0]):
-        for j in range(trues.shape[1]):
-            if trues[i, j] != pad_token_label_id:
-                trues_list[i].append(label_map[trues[i][j]])
-                # 超长的 case ， 默认剩余长度预测为 O
-                if preds[i][j] != -1:
-                    preds_list[i].append(label_map[preds[i][j]])
-                else:
-                    preds_list[i].append("O")
+    print("span_precision: ", precision)
+    print("span_recall: ", recall)
+    print("span_f1: ", f1)
+    res = {}
+    res['span_precision'] = precision
+    res['span_recall'] = recall
+    res['span_f1'] = f1
 
-    true_entities = get_entities_bio(trues_list)
-    pred_entities = get_entities_bio(preds_list)
+    # outputs is a dict, outputs.keys is {'span_f1', 'pred', 'pred_label_idx', 'all_span_idxs', 'span_label_ltoken'}
+    return res, dev_outputs # dev_outputs is a list of outputs, which is [outputs1, outputs2 ... ]
 
-    results = {
-        "f1": f1_score(true_entities, pred_entities),
-        'report': classification_report(true_entities, pred_entities)
-    }
 
-    # save metrics result
-    output_eval_file = os.path.join(args.output_dir, "eval_results.txt")
-    if not os.path.exists(args.output_dir):
-        os.makedirs(args.output_dir)
+# return average f1 in various robust testset
+def robust_evaluate(args, ckpt_dir, tokenizer_args, labels, pad_token_label_id,
+                    prefix="best ckpt", model=None, tokenizer=None):
+    base_dir = '/root/RobustNER/data/conll2003/v0/'
+    robust_f1 = 0
 
-    with open(output_eval_file, "a") as writer:
-        logger.info("***** Eval results {0} {1} *****".format(mode, prefix))
-        writer.write("***** Eval results {0} {1} *****\n".format(mode, prefix))
-        for key in sorted(results.keys()):
-            if key == 'report_dict':
-                continue
-            logger.info("{} = {}".format(key, str(results[key])))
-            writer.write("{} = {}\n".format(key, str(results[key])))
+    # eval best checkpoint
+    for trans in trans_list:
+        logger.info(
+            "Start evaluate Robustness of {0} {1} transformation".format(prefix, trans)
+        )
+        trans_dir = os.path.join(base_dir, trans, "trans")
+        assert os.path.exists(trans_dir)
+        results, predictions = fast_evaluate(
+            args, ckpt_dir, tokenizer_args, labels, pad_token_label_id,
+            mode="test", prefix="{0} {1}".format(prefix, trans),
+            data_dir=trans_dir, model=model, tokenizer=tokenizer
+        )
+        fitlog.add_metric(
+            {"test": {"{0}_{1}_f1".format(prefix, trans): results["span_f1"]}},
+            step=0
+        )
+        robust_f1 += results["span_f1"]
 
-    return results, preds_list
+        # Save predictions
+        if prefix == "best ckpt":
+            test_file = os.path.join(trans_dir, "test.txt")
+            out_trans_predictions = os.path.join(
+                ckpt_dir, "{0}_{1}_predictions.txt".format(prefix, trans)
+            )
+            predictions_save(test_file, predictions, out_trans_predictions)
+
+            logger.info(
+                "Finish evaluate Robustness of {0} {1} transformation".format(prefix, trans)
+            )
+
+    return robust_f1 / len(trans_list)
 
 
 def fast_evaluate(args, ckpt_dir, tokenizer_args, labels, pad_token_label_id,
-                  mode, prefix='', data_dir=None):
-    tokenizer = AutoTokenizer.from_pretrained(ckpt_dir, **tokenizer_args)
-    model = AutoModelForCrfNer.from_pretrained(
-        ckpt_dir,
-        args=args,
-        baseline=args.baseline
-    )
-    model.to(args.device)
-    results, predictions = evaluate(args, model, tokenizer, labels, pad_token_label_id,
-                          mode=mode, prefix=prefix, data_dir=data_dir)
+                  mode, prefix='', model=None, tokenizer=None, data_dir=None):
+    if not tokenizer:
+        tokenizer = AutoTokenizer.from_pretrained(ckpt_dir, **tokenizer_args)
+
+    if not model:
+        model = AutoModelForCrfNer.from_pretrained(
+            ckpt_dir,
+            args=args
+        )
+        model.to(args.device)
+
+    results, predictions = evaluate(args, model, tokenizer, labels,
+                                    pad_token_label_id, mode=mode,
+                                    prefix=prefix, data_dir=data_dir)
     output_eval_file = os.path.join(ckpt_dir, "{0}_results.txt".format(mode))
 
     with open(output_eval_file, "a") as writer:
         writer.write('***** Predict in {0} {1} dataset *****\n'.format(mode, prefix))
-        writer.write("{} = {}\n".format('report', str(results['report'])))
+        # writer.write("{} = {}\n".format('report', str(results['report'])))
 
     return results, predictions
 
@@ -260,18 +345,17 @@ def get_args():
     )
     parser.add_argument(
         "--output_dir",
-        default="/root/RobustNER/out/bert_uncase/bn_ent_reg_1e_3/",
-        # default="/root/RobustNER/out/bert_uncase/debug/",
+        default="/root/RobustNER/out/bert_uncase/debug/",
         type=str,
         help="The output directory where the model predictions and "
              "checkpoints will be written.",
     )
     # Other parameters
-    parser.add_argument("--gpu_id", default=3, type=int,
+    parser.add_argument("--gpu_id", default=0, type=int,
                         help="GPU number id")
 
     parser.add_argument(
-        "--epoch", default=50, type=float,
+        "--epoch", default=10, type=float,
         help="Total number of training epochs to perform."
     )
     parser.add_argument(
@@ -279,9 +363,19 @@ def get_args():
         help="post encoder out dim"
     )
 
+    # I(Z; context) parameters
+    parser.add_argument("--regular_context", action="store_false",
+                        help="Whether add I(z, context) regular.")
+
+    parser.add_argument("--theta", default=1e-4, type=float,
+                        help="theta params")
+
     # I(X; Z) parameters
     parser.add_argument("--regular_z", action="store_false",
                         help="Whether add I(x, z) regular.")
+
+    parser.add_argument("--regular_norm", action="store_false",
+                        help="Whether add I(z|x, N) regular.")
 
     parser.add_argument(
         "--beta", default=5e-5, type=float,
@@ -315,9 +409,23 @@ def get_args():
         help="MI estimator for entity and its encoding representation"
     )
 
+    # context
+
+    # negative sample build mode
     parser.add_argument(
         "--rep_mode", default="typos",
         help="which strategy to replace entity, support typos and ngram now."
+    )
+    parser.add_argument(
+        "--rep_total", action="store_false",
+        help="whether replace full entity token or its subword."
+    )
+    parser.add_argument(
+        "--pmi_json", default='/root/RobustNER/data/conll2003/pmi.json'
+    )
+    parser.add_argument(
+        "--pmi_preserve", default=0.2, type=float,
+        help="what extent of PMI ranking subword preserve."
     )
 
     # training parameters
@@ -357,17 +465,21 @@ def main():
     # Prepare CONLL-2003 task
     labels = get_labels(args.labels)
     num_labels = len(labels)
+    # print(labels)
+    # print(num_labels)
 
     # Use cross entropy ignore index as padding label id
     pad_token_label_id = CrossEntropyLoss().ignore_index
     args.model_type = args.model_type.lower()
+    print(args.model_type)
 
     config = AutoConfig.from_pretrained(
         args.config_name if args.config_name else args.model_name_or_path,
         num_labels=num_labels,
         id2label={str(i): label for i, label in enumerate(labels)},
         label2id={label: i for i, label in enumerate(labels)},
-        cache_dir=None
+        cache_dir=None,
+        output_hidden_states=True
     )
 
     #####
@@ -383,11 +495,11 @@ def main():
 
     # 可以只加载 预训练 模型, 也可以加载全部保存的参数
     model = AutoModelForCrfNer.from_pretrained(
+        # args.output_dir,
         args.model_name_or_path,
         config=config,
         cache_dir=None,
-        args=args,
-        baseline=args.baseline
+        args=args
     )
 
     model.to(args.device)
@@ -400,9 +512,6 @@ def main():
     if args.do_train:
         global_step, tr_loss = train(args, model, tokenizer, labels, pad_token_label_id)
         logger.info(" global_step = %s, average loss = %s", global_step, tr_loss)
-        # Saving final-practices: if you use defaults names for the model,
-        # you can reload it using from_pretrained()
-        model_save(args, args.output_dir, model, tokenizer)
 
     best_ckpt_dir = os.path.join(args.output_dir, "best_checkpoint")
 
@@ -418,13 +527,13 @@ def main():
                                    tokenizer_args, labels,
                                    pad_token_label_id,
                                    mode="test", prefix="final ckpt")
-        fitlog.add_metric({"test": {"final_ckpt_f1": results["f1"]}}, step=0)
+        fitlog.add_metric({"test": {"final_ckpt_f1": results["span_f1"]}}, step=0)
 
         # eval best checkpoint
         results, predictions = fast_evaluate(
             args, best_ckpt_dir, tokenizer_args, labels, pad_token_label_id,
             mode="test", prefix="best ckpt")
-        fitlog.add_metric({"test": {"best_ckpt_f1": results["f1"]}}, step=0)
+        fitlog.add_metric({"test": {"best_ckpt_f1": results["span_f1"]}}, step=0)
 
         # Save predictions
         test_file = os.path.join(args.data_dir, "test.txt")
@@ -432,31 +541,9 @@ def main():
         predictions_save(test_file, predictions, output_test_predictions)
 
     if args.do_robustness_eval:
-        base_dir = '/root/RobustNER/data/conll2003/'
         # eval best checkpoint
-        for trans in trans_list:
-            logger.info(
-                "Start evaluate Robustness of {0} transformation".format(trans)
-            )
-            trans_dir = os.path.join(base_dir, trans, "trans")
-            assert os.path.exists(trans_dir)
-            results, predictions = fast_evaluate(
-                args, best_ckpt_dir, tokenizer_args, labels, pad_token_label_id,
-                mode="test", prefix="best ckpt {0}".format(trans),
-                data_dir=trans_dir
-            )
-            fitlog.add_metric({"test": {"best_ckpt_{}_f1".format(trans): results["f1"]}}, step=0)
-
-            # Save predictions
-            test_file = os.path.join(trans_dir, "test.txt")
-            out_trans_predictions = os.path.join(
-                best_ckpt_dir, "{0}_predictions.txt".format(trans)
-            )
-            predictions_save(test_file, predictions, out_trans_predictions)
-
-            logger.info(
-                "Finish evaluate Robustness of {0} transformation".format(trans)
-            )
+        robust_evaluate(args, best_ckpt_dir, tokenizer_args, labels,
+                        pad_token_label_id, prefix="best ckpt")
 
 
 if __name__ == "__main__":

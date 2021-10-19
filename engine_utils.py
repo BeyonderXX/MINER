@@ -7,7 +7,7 @@ import logging
 import argparse
 
 from torch.utils.data import TensorDataset
-from utils.utils_ner import convert_examples_to_features, read_examples_from_file, build_neg_samples
+from utils.utils_ner import convert_examples_to_features, read_examples_from_file, build_typos_neg_examples, build_ent_mask_examples
 
 from transformers import (
     AdamW,
@@ -152,24 +152,22 @@ def prepare_optimizer_scheduler(args, model, training_steps):
     crf_parameters = model.decoder.named_parameters()
     other_parameters = list(model.classifier.named_parameters()) \
 
+
     if not args.baseline:
         other_parameters = other_parameters \
-                           + list(model.post_encoder.named_parameters()) \
                            + list(model.entity_regularizer.named_parameters())\
-                           + [("r_mean", model.r_mean)] + [("r_log_var", model.r_log_var)]
+                           + [("r_mean", model.r_mean)] + [("r_log_var", model.r_log_var)] \
+                           + list(model.post_encoder.named_parameters())
+
+        # 加入 context regular 参数
+        other_parameters += list(model.context_regularizer.named_parameters())
 
     args.bert_lr = args.bert_lr if args.bert_lr else args.learning_rate
     args.classifier_lr = args.classifier_lr if args.classifier_lr else args.learning_rate
     args.crf_lr = args.crf_lr if args.crf_lr else args.learning_rate
 
     optimizer_grouped_parameters = [
-        {"params": [p for n, p in bert_parameters if not any(nd in n for nd in no_decay)],
-         "weight_decay": args.weight_decay,
-         "lr": args.bert_lr},
-        {"params": [p for n, p in bert_parameters if any(nd in n for nd in no_decay)],
-         "weight_decay": 0.0,
-         "lr": args.bert_lr},
-
+        # other params
         {"params": [p for n, p in other_parameters if not any(nd in n for nd in no_decay)],
          "weight_decay": args.weight_decay,
          "lr": args.classifier_lr},
@@ -177,6 +175,18 @@ def prepare_optimizer_scheduler(args, model, training_steps):
          "weight_decay": 0.0,
          "lr": args.classifier_lr},
 
+        # bert params
+        {"params": [p for n, p in bert_parameters if
+                    not any(nd in n for nd in no_decay)],
+         "weight_decay": args.weight_decay,
+         "lr": args.bert_lr},
+
+        {"params": [p for n, p in bert_parameters if
+                    any(nd in n for nd in no_decay)],
+         "weight_decay": 0.0,
+         "lr": args.bert_lr},
+
+        # crf params
         {"params": [p for n, p in crf_parameters if not any(nd in n for nd in no_decay)],
          "weight_decay": args.weight_decay,
          "lr": args.crf_lr},
@@ -184,6 +194,7 @@ def prepare_optimizer_scheduler(args, model, training_steps):
          "weight_decay": 0.0,
          "lr": args.crf_lr},
     ]
+
 
     optimizer = AdamW(optimizer_grouped_parameters, lr=args.learning_rate, eps=args.adam_epsilon)
     scheduler = get_linear_schedule_with_warmup(
@@ -212,17 +223,41 @@ def load_and_cache_examples(args, mode, data_dir=None):
     return examples
 
 
-def get_dataset(args, examples, tokenizer, labels, pad_token_label_id, trans_examples=None):
-    features_tensors = get_feature_tensor(args, examples, tokenizer, labels, pad_token_label_id)
+# 获取原来数据集和负样本数据集特征
+def get_ds_features(args, examples, tokenizer, labels, pad_token_label_id):
+    # input_ids, input_mask, valid_mask, segment_ids, label_ids
+    features = dataset_2_features(args, examples, tokenizer, labels, pad_token_label_id)
+    # print('def get_ds_features()-end')
 
-    if trans_examples is not None:
-        trans_features_tensors = get_feature_tensor(args, trans_examples, tokenizer, labels, pad_token_label_id)
-        features_tensors = features_tensors + trans_features_tensors
+    neg_examples = build_typos_neg_examples(examples, tokenizer,
+                                            neg_total=args.rep_total,
+                                            neg_mode=args.rep_mode,
+                                            pmi_json=args.pmi_json,
+                                            preserve_ratio=args.pmi_preserve)
+    neg_features = dataset_2_features(args, neg_examples, tokenizer, labels, pad_token_label_id, log_prefix='negative')
 
-    return TensorDataset(*features_tensors)
+
+    return TensorDataset(
+        *features,
+        *neg_features
+    )
 
 
-def get_feature_tensor(args, examples, tokenizer, labels, pad_token_label_id):
+# 获取 mask 机制模型数据集特征
+def get_mask_ds_features(args, examples, tokenizer, labels, pad_token_label_id):
+    masked_examples = build_ent_mask_examples(examples, tokenizer,
+                                              mask_ratio=0.85,
+                                              mask_token='[MASK]',
+                                              pmi_json=args.pmi_json,
+                                              preserve_ratio=args.pmi_preserve)
+    features = dataset_2_features(args, masked_examples, tokenizer, labels,
+                                  pad_token_label_id)
+    return TensorDataset(
+        *features
+    )
+
+
+def dataset_2_features(args, examples, tokenizer, labels, pad_token_label_id, log_prefix=''):
     features = convert_examples_to_features(
         examples,
         labels,
@@ -241,7 +276,9 @@ def get_feature_tensor(args, examples, tokenizer, labels, pad_token_label_id):
         pad_token=tokenizer.pad_token_id,
         pad_token_segment_id=tokenizer.pad_token_type_id,
         pad_token_label_id=pad_token_label_id,
+        log_prefix=log_prefix
     )
+
     # Convert to Tensors and build dataset
     all_input_ids = torch.tensor([f.input_ids for f in features],
                                  dtype=torch.long)
@@ -255,9 +292,19 @@ def get_feature_tensor(args, examples, tokenizer, labels, pad_token_label_id):
     all_label_ids = torch.tensor([f.label_ids for f in features],
                                  dtype=torch.long)
 
-    return [all_input_ids, all_input_mask, all_valid_mask,
-            all_segment_ids, all_label_ids]
+    all_span_idxs_ltoken = torch.LongTensor([f.all_span_idxs_ltoken for f in features])
+    real_span_mask_ltoken = torch.LongTensor([f.real_span_mask_ltoken for f in features])
+    span_label_ltoken = torch.LongTensor([f.span_label_ltoken for f in features])
+    all_span_lens = torch.LongTensor([f.all_span_lens for f in features])
+    morph_idxs = torch.LongTensor([f.morph_idxs for f in features])
+    all_span_weights = torch.Tensor([f.all_span_weights for f in features])
+    # all_span_word = [f.all_span_word for f in features]
+    all_span_idxs = torch.LongTensor([f.all_span_idxs for f in features])
 
+    # return all_input_ids, all_input_mask, all_valid_mask, all_segment_ids, all_label_ids, all_span_idxs_ltoken, morph_idxs, span_label_ltoken, all_span_lens, all_span_weights, real_span_mask_ltoken, all_span_word, all_span_idxs
+    
+    # 0all_input_ids, 1all_input_mask, 2all_valid_mask, 3all_segment_ids, 4all_label_ids, 5all_span_idxs_ltoken, 6morph_idxs, 7span_label_ltoken, 8all_span_lens, 9all_span_weights, 10real_span_mask_ltoken, 11all_span_idxs
+    return all_input_ids, all_input_mask, all_valid_mask, all_segment_ids, all_label_ids, all_span_idxs_ltoken, morph_idxs, span_label_ltoken, all_span_lens, all_span_weights, real_span_mask_ltoken, all_span_idxs
 
 def resuming_training(args, train_dataloader):
     epochs_trained = 0
@@ -298,21 +345,54 @@ def model_save(args, output_dir, model, tokenizer):
 
 # save predictions result
 def predictions_save(origin_file, predictions, output_file):
+    
+    pred_label_idx = [x['pred_label_idx'].tolist() for x in predictions]
+    all_span_idxs = [x['all_span_idxs'].tolist() for x in predictions]
+    span_label_ltoken = [x['span_label_ltoken'].tolist() for x in predictions]
+    
+    idx2label = {0:'O', 1:'ORG', 2:'PER', 3:'LOC', 4:'MISC'}
 
     with open(output_file, "w") as writer:
-        
         with open(origin_file, "r") as f:
-            example_id = 0
+            words = []
+            lines = []
             for line in f:
                 if line.startswith("-DOCSTART-") or line == "" or line == "\n":
-                    writer.write(line)
-                    if not predictions[example_id]:
-                        example_id += 1
-                elif predictions[example_id]:
-                    output_line = line.split()[0] + " " + predictions[
-                        example_id].pop(0) + "\n"
-                    writer.write(output_line)
+                    if words:
+                        lines.append(words)
+                        words = []
                 else:
-                    logger.warning("No prediction for '%s'.", line.split()[0])
-                    output_line = line.split()[0] + " " + 'O' + "\n"
-                    writer.write(output_line)
+                    splits = line.split(" ")
+                    if len(splits) not in [2, 4]:
+                        print(line)
+                    
+                    words.append(splits[0])
+            if words:
+                lines.append(words)
+
+
+            cnt = 0
+            for i in range(len(pred_label_idx)):
+                for span_idxs,lps,lts in zip(all_span_idxs[i], pred_label_idx[i], span_label_ltoken[i]):
+                    word_list = (lines[cnt])[:]
+                    text = ''
+                    for sid,lp,lt in zip(span_idxs, lps, lts):
+                        if lp !=0 or lt!=0:
+                            plabel = idx2label[int(lp)]
+                            tlabel = idx2label[int(lt)]
+                            sidx, eidx = sid
+                            for k in range(int(sidx), int(eidx) + 1):
+                                word_list[k] = word_list[k] + ' ' + tlabel + ' ' + plabel
+                    for k in range(len(word_list)):
+                        if ' ' not in word_list[k]:
+                            word_list[k] = word_list[k] + ' O O'
+                                         
+                    text = '\n'.join(word_list)
+                    writer.write(text + '\n\n')
+                    cnt += 1
+            
+            f.close()
+        writer.close()
+
+
+

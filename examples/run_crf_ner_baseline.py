@@ -398,8 +398,9 @@ def load_and_cache_examples(args, tokenizer, labels, pad_token_label_id, mode):
             pad_token_label_id=pad_token_label_id,
         )
 
-        logger.info("Saving features into cached file %s", cached_features_file)
-        torch.save(features, cached_features_file)
+        # skip feature save
+        # logger.info("Saving features into cached file %s", cached_features_file)
+        # torch.save(features, cached_features_file)
 
     if not evaluate:
         torch.distributed.barrier()  # Make sure only the first process in distributed training process the dataset, and the others will use the cache

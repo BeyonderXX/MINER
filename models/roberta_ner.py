@@ -2,9 +2,11 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from torch.nn import CrossEntropyLoss
-from transformers.modeling_bert import BertPreTrainedModel
-from transformers.modeling_roberta import RobertaModel
-
+# from transformers.modeling_bert import BertPreTrainedModel
+# from transformers.modeling_roberta import RobertaModel
+from transformers.models.bert.modeling_bert import BertPreTrainedModel
+from transformers.models.roberta.modeling_roberta import RobertaModel
+ 
 from .layers.linears import PoolerEndLogits, PoolerStartLogits
 from .losses.crf import CRF
 from .losses.focal_loss import FocalLoss
