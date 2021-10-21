@@ -462,11 +462,9 @@ def main():
     )
     logger.warning("Process device: %s", args.device)
 
-    # Prepare CONLL-2003 task
+    # modified, Prepare CONLL-2003 task
     labels = get_labels(args.labels)
     num_labels = len(labels)
-    # print(labels)
-    # print(num_labels)
 
     # Use cross entropy ignore index as padding label id
     pad_token_label_id = CrossEntropyLoss().ignore_index

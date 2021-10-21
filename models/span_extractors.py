@@ -1,12 +1,125 @@
 import torch
 from torch.nn.parameter import Parameter
-from overrides import overrides
+import logging
 from pathlib import Path
 import math
 import os
+from typing import Any
 from urllib.parse import urlparse
 from typing import Union, Optional, List
 from torch.nn.functional import embedding
+from collections import defaultdict
+
+from typing import (
+    Union
+)
+
+from typing import (
+    Callable,
+    Dict,
+    List,
+    Optional,
+    Tuple,
+    Type,
+    TypeVar,
+    Any,
+)
+
+
+class CustomDetHash:
+    def det_hash_object(self) -> Any:
+        """
+        By default, `det_hash()` pickles an object, and returns the hash of the pickled
+        representation. Sometimes you want to take control over what goes into
+        that hash. In that case, implement this method. `det_hash()` will pickle the
+        result of this method instead of the object itself.
+        If you return `None`, `det_hash()` falls back to the original behavior and pickles
+        the object.
+        """
+        raise NotImplementedError()
+
+
+T = TypeVar("T", bound="FromParams")
+
+_SubclassRegistry = Dict[str, Tuple[type, Optional[str]]]
+_registry = defaultdict(dict)
+_T = TypeVar("_T")
+
+
+def register(
+        name: str, constructor: Optional[str] = None,
+        exist_ok: bool = False
+) -> Callable[[Type[_T]], Type[_T]]:
+    """
+    Register a class under a particular name.
+    # Parameters
+    name : `str`
+        The name to register the class under.
+    constructor : `str`, optional (default=`None`)
+        The name of the method to use on the class to construct the object.  If this is given,
+        we will use this method (which must be a `@classmethod`) instead of the default
+        constructor.
+    exist_ok : `bool`, optional (default=`False`)
+        If True, overwrites any existing models registered under `name`. Else,
+        throws an error if a model is already registered under `name`.
+    # Examples
+    To use this class, you would typically have a base class that inherits from `Registrable`:
+    ```python
+    class Vocabulary(Registrable):
+        ...
+    ```
+    Then, if you want to register a subclass, you decorate it like this:
+    ```python
+    @Vocabulary.register("my-vocabulary")
+    class MyVocabulary(Vocabulary):
+        def __init__(self, param1: int, param2: str):
+            ...
+    ```
+    Registering a class like this will let you instantiate a class from a config file, where you
+    give `"type": "my-vocabulary"`, and keys corresponding to the parameters of the `__init__`
+    method (note that for this to work, those parameters must have type annotations).
+    If you want to have the instantiation from a config file call a method other than the
+    constructor, either because you have several different construction paths that could be
+    taken for the same object (as we do in `Vocabulary`) or because you have logic you want to
+    happen before you get to the constructor (as we do in `Embedding`), you can register a
+    specific `@classmethod` as the constructor to use, like this:
+    ```python
+    @Vocabulary.register("my-vocabulary-from-instances", constructor="from_instances")
+    @Vocabulary.register("my-vocabulary-from-files", constructor="from_files")
+    class MyVocabulary(Vocabulary):
+        def __init__(self, some_params):
+            ...
+        @classmethod
+        def from_instances(cls, some_other_params) -> MyVocabulary:
+            ...  # construct some_params from instances
+            return cls(some_params)
+        @classmethod
+        def from_files(cls, still_other_params) -> MyVocabulary:
+            ...  # construct some_params from files
+            return cls(some_params)
+    ```
+    """
+    registry = _registry[name]
+
+    def add_subclass_to_registry(subclass: Type[_T]) -> Type[_T]:
+        # Add to registry, raise an error if key has already been used.
+        if name in registry:
+            if exist_ok:
+                message = (
+                    f"{name} has already been registered as {registry[name][0].__name__}, but "
+                    f"exist_ok=True, so overwriting with {name}"
+                )
+                logging.info(message)
+            else:
+                message = (
+                    f"Cannot register {name} as {name}; "
+                    f"name already in use for {registry[name][0].__name__}"
+                )
+                raise Exception(message)
+        registry[name] = (subclass, constructor)
+        return subclass
+
+    return add_subclass_to_registry
 
 
 class TokenEmbedder(torch.nn.Module):
@@ -49,7 +162,6 @@ class TimeDistributed(torch.nn.Module):
         super().__init__()
         self._module = module
 
-    @overrides
     def forward(self, *inputs, pass_through: List[str] = None, **kwargs):
 
         pass_through = pass_through or []
@@ -103,7 +215,7 @@ class TimeDistributed(torch.nn.Module):
         squashed_shape = [-1] + list(input_size[2:])
         return input_tensor.contiguous().view(*squashed_shape)
 
-@TokenEmbedder.register("embedding")
+
 class Embedding(TokenEmbedder):
     """
     A more featureful embedding module than the default in Pytorch.  Adds the ability to:
@@ -228,11 +340,9 @@ class Embedding(TokenEmbedder):
         else:
             self._projection = None
 
-    @overrides
     def get_output_dim(self) -> int:
         return self.output_dim
 
-    @overrides
     def forward(self, tokens: torch.Tensor) -> torch.Tensor:
         # tokens may have extra dimensions (batch_size, d1, ..., dn, sequence_length),
         # but embedding expects (batch_size, sequence_length), so pass tokens to
@@ -273,7 +383,6 @@ class SpanExtractor(torch.nn.Module):
     spans.
     """
 
-    @overrides
     def forward(
         self,
         sequence_tensor: torch.FloatTensor,
@@ -372,7 +481,6 @@ class SpanExtractorWithSpanWidthEmbedding(SpanExtractor):
                 "specify both num_width_embeddings and span_width_embedding_dim."
             )
 
-    @overrides
     def forward(
         self,
         sequence_tensor: torch.FloatTensor,
@@ -429,7 +537,6 @@ class SpanExtractorWithSpanWidthEmbedding(SpanExtractor):
 
         return span_embeddings
 
-    @overrides
     def get_input_dim(self) -> int:
         return self._input_dim
 
@@ -446,7 +553,6 @@ class SpanExtractorWithSpanWidthEmbedding(SpanExtractor):
         raise NotImplementedError
 
 
-@SpanExtractor.register("endpoint")
 class EndpointSpanExtractor(SpanExtractorWithSpanWidthEmbedding):
     """
     Represents spans as a combination of the embeddings of their endpoints. Additionally,
@@ -568,6 +674,17 @@ class EndpointSpanExtractor(SpanExtractorWithSpanWidthEmbedding):
         )
 
         return combined_tensors
+
+
+def _get_suggestion(name: str, available: List[str]) -> Optional[str]:
+    # First check for simple mistakes like using '-' instead of '_', or vice-versa.
+    for ch, repl_ch in (("_", "-"), ("-", "_")):
+        suggestion = name.replace(ch, repl_ch)
+        if suggestion in available:
+            return suggestion
+    # If we still haven't found a reasonable suggestion, we return the first suggestion
+    # with an edit distance (with transpositions allowed) of 1 to `name`.
+    return None
 
 
 def is_url_or_existing_file(url_or_filename: Union[str, Path, None]) -> bool:

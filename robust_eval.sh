@@ -1,1 +1,1 @@
-nohup python -u main.py --gpu_id 2 --output_dir /root/RobustNER/out/bert_bsl/ --epoch 50  --baseline --regular_z --regular_norm --regular_entity --regular_context --batch_size 128 --do_train --do_eval --do_predict --do_robustness_eval > bert_bsl.log 2>&1 &
+nohup python -u main.py --gpu_id 1 --output_dir /root/RobustNER/out/bert_span_test/ --epoch 30  --baseline --regular_z --regular_norm --regular_entity --regular_context --batch_size 128 --do_train --do_eval --do_predict --do_robustness_eval > bert_span_test.log 2>&1 &
