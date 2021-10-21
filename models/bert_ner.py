@@ -1,16 +1,9 @@
 import torch
 import torch.nn as nn
-import torch.nn.functional as F
-from torch.nn import CrossEntropyLoss
-# from transformers.modeling_bert import BertModel
-# from transformers.modeling_bert import BertPreTrainedModel
-from transformers.models.bert.modeling_bert import BertModel
-from transformers.models.bert.modeling_bert import BertPreTrainedModel
+from transformers.modeling_bert import BertModel
+from transformers.modeling_bert import BertPreTrainedModel
 
-from .layers.linears import PoolerEndLogits, PoolerStartLogits
 from .losses.crf import CRF
-from .losses.focal_loss import FocalLoss
-from .losses.label_smoothing import LabelSmoothingCrossEntropy
 from .model_utils import valid_sequence_output
 
 
@@ -61,8 +54,6 @@ class BertCrfForNer(BertPreTrainedModel):
             outputs = (skip_label * loss,) + outputs
 
         return outputs  # (loss), scores
-
-
 
 
 class BertSpanNER(BertPreTrainedModel):

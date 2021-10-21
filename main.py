@@ -23,7 +23,7 @@ from torch.nn import CrossEntropyLoss
 from torch.utils.data import DataLoader, RandomSampler, SequentialSampler
 from tqdm import tqdm, trange
 from transformers import AutoConfig, AutoTokenizer
-from eval_metric import span_f1,span_f1_prune,get_predict,get_predict_prune
+from eval_metric import span_f1, span_f1_prune, get_predict, get_predict_prune
 from models.model_ner import AutoModelForCrfNer
 
 from utils.utils_ner import get_labels, collate_fn

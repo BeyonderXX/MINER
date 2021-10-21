@@ -8,10 +8,11 @@ import json
 
 from utils.typos import typos
 from utils.utils_metrics import get_entities
-from allennlp.data.dataset_readers.dataset_utils import enumerate_spans
+from .allen_utils import enumerate_spans
 
 logger = logging.getLogger(__name__)
 max_spanLen = 4
+
 
 class InputExample(object):
     """A single training/test example for token classification."""
@@ -850,9 +851,8 @@ if __name__ == "__main__":
     for mode in ['typos', "ngram"]:
         print("#"*50)
         print(mode)
-        trans_examples = build_neg_samples(examples, mode=mode)
-
-        for example in trans_examples:
-            print("*"*50)
-            print(" ".join(example.words))
-            print(" ".join(example.labels))
+        # trans_examples = build_neg_samples(examples, mode=mode)
+        # for example in trans_examples:
+        #     print("*"*50)
+        #     print(" ".join(example.words))
+        #     print(" ".join(example.labels))

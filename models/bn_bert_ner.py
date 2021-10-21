@@ -2,7 +2,7 @@ from torch import nn
 import torch
 from .bert_ner import BertPreTrainedModel, BertModel, CRF, valid_sequence_output
 from .MI_estimators import CLUB, vCLUB, VIB, kl_div, kl_norm, InfoNCE
-from allennlp.modules.span_extractors import EndpointSpanExtractor
+from .span_extractors import EndpointSpanExtractor
 from .classifier import MultiNonLinearClassifier
 from torch.nn import functional as F
 
