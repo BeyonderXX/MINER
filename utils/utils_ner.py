@@ -86,9 +86,6 @@ def read_examples_from_file(data_dir, mode):
                     # Examples could have no label for mode = "test"
                     labels.append("O")
         if words:
-            # print('find words')
-            # print(words)
-            # print(labels)
             examples.append(InputExample(guid="{}-{}".format(mode, guid_index), words=words, labels=labels))
     return examples
 
@@ -236,15 +233,12 @@ def convert_examples_to_features(
         )
         check_feature(*feature[1:6], max_seq_length)
 
-        if index < 2:
+        if index < 0:
             log_example(
                 *feature,
                 prefix="\n{0} example {1} feature".format(log_prefix, index)
             )
 
-
-        # all_span_idxs_ltoken, morph_idxs, span_label_ltoken, all_span_lens, all_span_weights, 
-        # real_span_mask_ltoken, words, all_span_word, all_span_idxs
         features.append(
             InputFeatures(
                 input_ids=feature[1],
@@ -298,6 +292,7 @@ def check_feature(input_ids, input_mask, valid_mask,
     assert len(label_ids) == max_seq_length
     assert len(valid_mask) == max_seq_length
 
+
 def case_feature_tokenLevel(morph2idx, span_idxs, words, max_spanlen):
     '''
     this function use to characterize the capitalization feature.
@@ -309,7 +304,7 @@ def case_feature_tokenLevel(morph2idx, span_idxs, words, max_spanlen):
         sid, eid = idxs
         span_word = words[sid:eid + 1]
         caseidx1 = [0 for _ in range(max_spanlen)]
-        for j,token in enumerate(span_word):
+        for j, token in enumerate(span_word):
             tfeat = ''
             if token.isupper():
                 tfeat = 'isupper'
@@ -321,7 +316,7 @@ def case_feature_tokenLevel(morph2idx, span_idxs, words, max_spanlen):
                 tfeat = 'isdigit'
             else:
                 tfeat = 'other'
-            caseidx1[j] =morph2idx[tfeat]
+            caseidx1[j] = morph2idx[tfeat]
         caseidxs.append(caseidx1)
 
     return caseidxs   
@@ -507,7 +502,6 @@ def example_to_feature(
                 example.words, valid_mask, all_span_idxs, seidxs_format)
 
 
-
     tmp_minus = int((max_spanLen + 1) * max_spanLen / 2)
     max_num_span = 128 * max_spanLen - tmp_minus
 
@@ -563,6 +557,10 @@ def example_to_feature(
 
     input_ids = tokenizer.convert_tokens_to_ids(tokens)
 
+    if not check_span(all_span_idxs_ltoken, input_ids):
+        print('Debug')
+
+
     # The mask has 1 for real tokens and 0 for padding tokens. Only real
     # tokens are attended to.
     input_mask = [1 if mask_padding_with_zero else 0] * len(input_ids)
@@ -591,13 +589,22 @@ def example_to_feature(
     return tokens, input_ids, input_mask, valid_mask, segment_ids, label_ids,   all_span_idxs_ltoken, morph_idxs, span_label_ltoken, all_span_lens, all_span_weights, real_span_mask_ltoken, example.words, all_span_word, all_span_idxs
 
 
+# [1, subword_len], [subword_len]
+def check_span(all_span_idxs_ltoken, input_ids):
+    for idxes in all_span_idxs_ltoken:
+        if max(idxes) > len(input_ids) - 1:
+            return False
+    return True
+
+
 def collate_fn(batch):
     """
     batch should be a list of (sequence, target, length) tuples...
     Returns a padded tensor of sequences sorted from longest to shortest,
     """
     # pos batch:
-    # 0all_input_ids, 1all_input_mask, 2all_valid_mask, 3all_segment_ids, 4all_label_ids, 
+    # 0all_input_ids, 1all_input_mask, 2all_valid_mask, 3all_segment_ids, 4all_label_ids,
+
     # 5all_span_idxs_ltoken, 6morph_idxs, 7span_label_ltoken, 8all_span_lens, 
     # 9all_span_weights, 10real_span_mask_ltoken, 11all_span_idxs
     
@@ -606,17 +613,43 @@ def collate_fn(batch):
     # 17all_span_idxs_ltoken, 18morph_idxs, 19span_label_ltoken, 20all_span_lens, 
     # 21all_span_weights, 22real_span_mask_ltoken, 23all_span_idxs
 
-    batch_tuple = tuple(map(torch.stack, zip(*batch)))   
-    batch_lens = torch.sum(batch_tuple[1], dim=-1, keepdim=False)
+    batch_tuple = tuple(map(torch.stack, zip(*batch)))
+
+    batch_lens = torch.sum(batch_tuple[2], dim=-1, keepdim=False)
+    sub_batch_lens = torch.sum(batch_tuple[1], dim=-1, keepdim=False)
+
     max_len = batch_lens.max().item()
+    sub_max_len = sub_batch_lens.max().item()
+
     max_span_len = min(502, 4 * max_len - 6)
+
+
+    # neg tuple
+    neg_batch_lens = torch.sum(batch_tuple[14], dim=-1, keepdim=False)
+    neg_sub_batch_lens = torch.sum(batch_tuple[13], dim=-1, keepdim=False)
+
+    neg_max_len = neg_batch_lens.max().item()
+    neg_sub_max_len = neg_sub_batch_lens.max().item()
+
+    neg_max_span_len = min(502, 4 * neg_max_len - 6)
+
     results = ()
+
     for i in range(len(batch_tuple)):
         if batch_tuple[i].dim() >= 2:
-            if (i >= 0 and i <= 4) or (i >= 12 and i <= 16):
-                results += (batch_tuple[i][:, :max_len], )
-            elif(i == 5 or i == 6 or i == 11 or i == 17 or i == 18 or i == 23):
+            if (i >= 0 and i <= 4):
+                results += (batch_tuple[i][:, :sub_max_len], )
+            elif(i == 5 or i == 6 or i == 11):
                 results += (batch_tuple[i][:, :max_span_len, :], )
+
+            elif(i >= 12 and i <= 16):
+                results += (batch_tuple[i][:, :neg_sub_max_len],)
+            elif(i == 17 or i == 18 or i == 23):
+                results += (batch_tuple[i][:, :neg_max_span_len, :],)
+
+            elif(i >= 19 and i<=22):
+                results += (batch_tuple[i][:, :neg_max_span_len],)
+
             else:
                 results += (batch_tuple[i][:, :max_span_len], )
         else:

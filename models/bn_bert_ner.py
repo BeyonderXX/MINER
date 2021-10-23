@@ -7,117 +7,93 @@ from .classifier import MultiNonLinearClassifier
 from torch.nn import functional as F
 
 
-class BertCrfWithBN(BertPreTrainedModel):
+class BertSpanNerBN(BertPreTrainedModel):
     def __init__(
         self,
         config,
         args=None
     ):
-        super(BertCrfWithBN, self).__init__(config)
-        # encoder 部分
+        super(BertSpanNerBN, self).__init__(config)
+        # just support bn/oov/cc
+        assert args.mode in ['bn', 'oov', 'cc']
+        self.mode = args.mode
+
+        # ---------------- encoder ------------------
         self.bert = BertModel(config)
         self.dropout = nn.Dropout(config.hidden_dropout_prob)
+        self.cross_entropy = torch.nn.CrossEntropyLoss(reduction='none')
+        self.start_outputs = nn.Linear(config.hidden_size, 1)
+        self.end_outputs = nn.Linear(config.hidden_size, 1)
 
-        # whether use baseline model
-        self.baseline = args.baseline
+        self.span_combination_mode = 'x,y'
+        self.max_span_width = 4
+        self.n_class = 5
+        # must set, when set a value to the max_span_width.
+        self.tokenLen_emb_dim = 50
 
-        # post encoder 部分
-        self.beta = args.beta
-        self.regular_z = args.regular_z
-        self.reg_norm = args.regular_norm
+        #  bucket_widths: Whether to bucket the span widths into log-space
+        #  buckets. If `False`, the raw span widths are used.
+        self.span_extractor = EndpointSpanExtractor(
+            config.hidden_size,
+            combination=self.span_combination_mode,
+            num_width_embeddings=self.max_span_width,
+            span_width_embedding_dim=self.tokenLen_emb_dim,
+            bucket_widths=True
+        )
 
-        if args.mi_estimator is 'VIB':
+        # import span-length embedding
+        self.spanLen_emb_dim = 100
+        self.morph_emb_dim = 100
+
+        # start + end + token len + span len + morph
+        input_dim = config.hidden_size * 2 + self.tokenLen_emb_dim \
+                    + self.spanLen_emb_dim + self.morph_emb_dim
+
+        # class logits
+        self.span_classifier = MultiNonLinearClassifier(
+            args.hidden_dim, self.n_class, dropout_rate=0.2
+        )
+        self.softmax = torch.nn.Softmax(dim=-1)
+
+        self.spanLen_embedding = nn.Embedding(
+            4+1, self.spanLen_emb_dim, padding_idx=0
+        )
+
+        self.morph_embedding = nn.Embedding(
+            5+1, self.morph_emb_dim, padding_idx=0
+        )
+
+        # ---------------- info bottleneck ------------------
+        if args.mi_estimator == 'VIB':
             MI_estimator = VIB
-        elif args.mi_estimator is 'CLUB':
+        elif args.mi_estimator == 'CLUB':
             # TODO, support
             MI_estimator = CLUB
         else:
             raise ValueError('Do not support {} estimator!'.format(args.mi_estimator))
 
-        # default just use last layer out
-        self.layers_num = 1
-
-        self.post_encoder = []
-        tag_dim = int(args.hidden_dim/self.layers_num)
-        hidden_dim = tag_dim * self.layers_num
-
-        self.post_encoder = MI_estimator(
-                embedding_dim=config.hidden_size,
-                hidden_dim=(tag_dim + config.hidden_size) // 2,
-                tag_dim=tag_dim,
+        self.beta = args.beta   # norm reg weights
+        self.bn_encoder = MI_estimator(
+                embedding_dim=input_dim,
+                hidden_dim=(args.hidden_dim + input_dim) // 2,
+                tag_dim=args.hidden_dim,
                 device=args.device
             )
-        # # poster encoder 编号与bert layer顺序相反
-        # setattr(self, 'poster_encoder_{}'.format(i), post_encoder)
 
-        # r(t)
-        self.r_mean = nn.Parameter(torch.randn(args.max_seq_length, hidden_dim))
-        self.r_log_var = nn.Parameter(torch.randn(args.max_seq_length, hidden_dim))
+        # predict p(y|z), I(Z; Y) 部分（decoder部分）
+        # TODO 加入 sample 机制
+        self.sample_size = 1
 
-        self.entity_regularizer = vCLUB()
+        # self.z_classifier = nn.Linear(args.hidden_dim, config.num_labels)
 
-        # I(Z; Y) 部分（decoder部分）
-        self.sample_size = args.sample_size
+        # predict p(y|v)
+        # self.alpha = args.alpha     # kl_v_z params
 
-        if self.baseline:
-            # self.classifier = nn.Linear(config.hidden_size, config.num_labels)
-            self.classifier = torch.nn.Softmax(dim=-1)
-        else:
-            self.classifier = nn.Linear(hidden_dim, config.num_labels)
-        self.decoder = CRF(num_tags=config.num_labels, batch_first=True)
-
-        # I(Z_i;X_i | X_(j!=i))
-        self.regular_entity = args.regular_entity
-        self.gama = args.gama
-
-        self.regular_context = args.regular_context
-        self.theta = args.theta
-        self.context_regularizer = InfoNCE(config.hidden_size, args.hidden_dim,
-                                           args.max_seq_length, device=args.device)
-
-
-
-        self.cross_entropy = torch.nn.CrossEntropyLoss(reduction='none')
-        self.start_outputs = nn.Linear(config.hidden_size, 1)
-        self.end_outputs = nn.Linear(config.hidden_size, 1)
-
-        # self.span_embedding = SingleLinearClassifier(config.hidden_size * 2, 1)
-
-        self.hidden_size = config.hidden_size
-
-        self.span_combination_mode = 'x,y'
-        self.max_span_width = 4
-        self.n_class = 5
-        self.tokenLen_emb_dim = 50 # must set, when set a value to the max_span_width.
-
-
-        #  bucket_widths: Whether to bucket the span widths into log-space buckets. If `False`, the raw span widths are used.
-
-        self._endpoint_span_extractor = EndpointSpanExtractor(config.hidden_size,
-                                                              combination=self.span_combination_mode,
-                                                              num_width_embeddings=self.max_span_width,
-                                                              span_width_embedding_dim=self.tokenLen_emb_dim,
-                                                              bucket_widths=True)
-
-
-        self.linear = nn.Linear(10, 1)
-        self.score_func = nn.Softmax(dim=-1)
-
-        # import span-length embedding
-        self.spanLen_emb_dim =100
-        self.morph_emb_dim = 100
-
-        input_dim = config.hidden_size * 2 + self.tokenLen_emb_dim + self.spanLen_emb_dim + self.morph_emb_dim
-
-
-        self.span_embedding = MultiNonLinearClassifier(input_dim, self.n_class, dropout_rate=0.2)
-
-        self.spanLen_embedding = nn.Embedding(4+1, self.spanLen_emb_dim, padding_idx=0)
-
-        self.morph_embedding = nn.Embedding(5+1, self.morph_emb_dim, padding_idx=0)
+        # ---------------- OOV regular ------------------
+        self.gama = args.gama       # oov regular weights
+        self.oov_reg = vCLUB()
 
         self.init_weights()
-
 
     def forward(
         self,
@@ -130,19 +106,20 @@ class BertCrfWithBN(BertPreTrainedModel):
         head_mask=None,
         inputs_embeds=None,
         # separate
+        decode=False,
+        step=0,
+        # separate
+        span_idxs_ltoken=None,
+        morph_idxs=None,
+        span_label_ltoken=None,
+        span_lens=None,
+        span_weights=None,
+        real_span_mask_ltoken=None,
+
         trans_input_ids=None,
         trans_attention_mask=None,
         trans_valid_mask=None,
         trans_token_type_ids=None,
-        decode=False,
-        step=0,
-        # separate
-        span_idxs_ltoken = None,
-        morph_idxs = None,
-        span_label_ltoken = None,
-        span_lens = None,
-        span_weights = None,
-        real_span_mask_ltoken = None,
         # separate = None,
         trans_span_idxs_ltoken = None,
         trans_morph_idxs = None,
@@ -154,8 +131,7 @@ class BertCrfWithBN(BertPreTrainedModel):
         """
         默认有 labels 为 train, 无 labels 为 test
         """
-        # origin_out = self.encoding(
-        origin_out, layer_out = self.encoding(
+        origin_rep = self.encoding(
             input_ids,
             attention_mask,
             token_type_ids,
@@ -167,59 +143,104 @@ class BertCrfWithBN(BertPreTrainedModel):
             span_lens,
             morph_idxs
         )
+        mean, log_var = self.bn_encoder.get_mu_logvar(origin_rep)
+        bsz, seqlen, _ = mean.shape
 
-        t = origin_out
+        if labels is not None:  # training
+            # (bsz * sample_size, seq_len, tag_dim)
+            z = mean
+            # TODO, add span_label_ltoken
+            ex_span_label_ltoken = span_label_ltoken.unsqueeze(1) \
+                .repeat(1, self.sample_size, 1) \
+                .view(bsz * self.sample_size, seqlen)
+            ex_real_span_mask_ltoken = real_span_mask_ltoken.unsqueeze(1) \
+                .repeat(1, self.sample_size, 1) \
+                .view(bsz * self.sample_size, seqlen)
+            ex_span_weights = span_weights.unsqueeze(1) \
+                .repeat(1, self.sample_size, 1) \
+                .view(bsz * self.sample_size, seqlen)
+            
+        else:  # testing
+            z = mean
 
-        predicts = self.classifier(t) # self.classifier = torch.nn.Softmax(dim=-1)
-        
-        outputs = {}
+        # (batch, n_span, n_class)
+        logits = self.span_classifier(z)
+        outputs = []
+        loss_dict = {}
 
         if decode:
-            outputs['pred'] = predicts
+            predicts = self.softmax(logits)
+            outputs = [predicts]
 
         if labels is not None:
-            loss = self.compute_loss(t, span_label_ltoken, real_span_mask_ltoken, span_weights, mode='train')
-            
-            outputs[f"train_loss"] = loss
-            outputs['loss'] = loss
+            loss = self.compute_loss(
+                logits, ex_span_label_ltoken, ex_real_span_mask_ltoken, 
+                ex_span_weights, mode='train'
+            )
+            loss_dict['z_loss'] = loss
 
+            # reg p(z|x) to N(0,1)
+            if self.beta > 0:
+                kl_encoder = kl_norm(mean, log_var)
+                loss_dict['norm'] = self.get_beta() * kl_encoder
 
-        return outputs
+            # add switch features
+            switch_rep = self.encoding(
+                trans_input_ids,
+                trans_attention_mask,
+                trans_token_type_ids,
+                position_ids,
+                head_mask,
+                inputs_embeds,
+                trans_valid_mask,
+                trans_span_idxs_ltoken,
+                trans_span_lens,
+                trans_morph_idxs
+            )
+            switch_mean, switch_log_var = self.bn_encoder.get_mu_logvar(switch_rep)
+            switch_logits = self.span_classifier(switch_mean)
 
+            switch_loss = self.compute_loss(
+                switch_logits, trans_span_label_ltoken,
+                trans_real_span_mask_ltoken, trans_span_weights, mode='train'
+            )
+            loss_dict['s_z_loss'] = switch_loss
+
+            # todo, add I(z1, z2)
+            entity_mi = self.oov_reg.update(
+                mean, switch_mean
+            )
+            loss_dict['oov'] = self.gama * entity_mi
+
+            loss_dict['loss'] = sum([item[1] for item in loss_dict.items()])
+            outputs = [loss_dict] + outputs
+
+        return outputs  # (loss), scores
 
     def compute_loss(self, all_span_rep, span_label_ltoken, real_span_mask_ltoken, span_weights, mode):
-        '''
+        """
 
         :param all_span_rep: shape: (bs, n_span, n_class)
         :param span_label_ltoken:
         :param real_span_mask_ltoken:
         :return: loss
-        '''
+        """
         batch_size, n_span = span_label_ltoken.size()
-        # print('batch_size = :')
-        # print(batch_size)
-        # print(n_span)
 
-        all_span_rep1 = all_span_rep.view(-1,self.n_class)
+        all_span_rep1 = all_span_rep.view(-1, self.n_class)
         span_label_ltoken1 = span_label_ltoken.view(-1)
 
         loss = self.cross_entropy(all_span_rep1, span_label_ltoken1)
         loss = loss.view(batch_size, n_span)
-        # print('loss 1: ', loss)
-        if mode=='train':
+
+        if mode == 'train':
             span_weight = span_weights
             loss = loss*span_weight
-            # print('loss 2: ', loss)
 
         loss = torch.masked_select(loss, real_span_mask_ltoken.bool())
-
-        # print("1 loss: ", loss)
-        loss= torch.mean(loss)
-        # print("loss: ", loss)
+        loss = torch.mean(loss)
 
         return loss
-        
-
 
     def encoding(
         self,
@@ -234,8 +255,8 @@ class BertCrfWithBN(BertPreTrainedModel):
         span_lens,
         morph_idxs
     ):
-        # encoder
-        outputs = self.bert(
+        # encoder [batch, seq_len, hidden]
+        sequence_output = self.bert(
             input_ids=input_ids,
             attention_mask=attention_mask,
             token_type_ids=token_type_ids,
@@ -244,68 +265,22 @@ class BertCrfWithBN(BertPreTrainedModel):
             inputs_embeds=inputs_embeds
         )
 
-        sequence_output = outputs[0] # [batch, seq_len, hidden]
-        # print('\n\nsequence_output_size:')
-        # print(sequence_output.size())
-        all_span_rep = self._endpoint_span_extractor(sequence_output, span_idxs_ltoken.long()) # [batch, n_span, hidden]
+        # try:
+        # [batch, n_span, hidden]
+        all_span_rep = self.span_extractor(sequence_output[0], span_idxs_ltoken.long())
+        # except:
+        #     print('debug')
+        # (bs, n_span, max_spanLen, dim)
+        span_morph_rep = self.morph_embedding(morph_idxs)
 
-        # print('\nall_span_rep_size:')
-        # print(all_span_rep.size())        
-        
-        
-        span_morph_rep = self.morph_embedding(morph_idxs) #(bs, n_span, max_spanLen, dim)
-        # print('\nspan_morph_rep_size:')
-        # print(span_morph_rep.size()) 
-        span_morph_rep = torch.sum(span_morph_rep, dim=2) #(bs, n_span, dim)
-        # print('\nspan_morph_rep_size:')
-        # print(span_morph_rep.size()) 
+        # TODO，sum 会导致模型无法分辨 span 特征来自哪个token，直接 reshape 效果待测试
+        span_morph_rep = torch.sum(span_morph_rep, dim=2)  # (bs, n_span, dim)
+
         spanlen_rep = self.spanLen_embedding(span_lens)  # (bs, n_span, len_dim)
         spanlen_rep = F.relu(spanlen_rep)
-        # print('\nspanlen_rep_size:')
-        # print(spanlen_rep.size()) 
         all_span_rep = torch.cat((all_span_rep, spanlen_rep, span_morph_rep), dim=-1)
-        # print('\nall_span_rep_size:')
-        # print(all_span_rep.size()) 
-        all_span_rep = self.span_embedding(all_span_rep)  # (batch, n_span, n_class)
-        # print('\nall_span_rep_size:')
-        # print(all_span_rep.size()) 
 
-        return all_span_rep, outputs[2]
-
-
-        # valid_output, attention_mask = valid_sequence_output(
-        #     sequence_output,
-        #     valid_mask,
-        #     attention_mask
-        # )
-        # valid_output = self.dropout(valid_output)
-
-        # （layer_num, (bsz, seq_len, hidden_size）)
-        return valid_output, outputs[2]
-        # return valid_output
-
-
-
-    
-
-
-
-
-    # 用来测试 context 对 bsl 的提升
-    def get_context_embedding(self, base_embedding):
-        # (bsz, seq_len, embedding_size)
-        bsz, seq_len, embedding_size = base_embedding.shape
-        position_masks = torch.eye(seq_len, device=self.device)
-
-        # (seq_len, seq_len)
-        position_mask = (position_masks[range(seq_len)] < 1).int() * (1 / seq_len)
-        # (bsz * embedding_zie, seq_len)
-        base_embedding = base_embedding.view(bsz, embedding_size, seq_len).view(bsz * embedding_size, seq_len)
-        # (bsz * embedding_zie, seq_len)
-        mask_embedding = torch.mm(base_embedding, position_mask)
-        mask_embedding = mask_embedding.view(bsz, embedding_size, seq_len).view(bsz, seq_len, embedding_size)
-
-        return mask_embedding
+        return all_span_rep
 
     def post_encoding(self, origin_out):
         # p(t|x) 假设符合高斯分布

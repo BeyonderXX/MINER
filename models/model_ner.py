@@ -4,7 +4,7 @@ from transformers import BertConfig, RobertaConfig
 from transformers import AutoConfig, PretrainedConfig
 
 from models.bert_ner import BertCrfForNer
-from models.bn_bert_ner import BertCrfWithBN
+from models.bn_bert_ner import BertSpanNerBN
 from models.roberta_ner import RobertaCrfForNer
 
 
@@ -13,7 +13,7 @@ MODEL_FOR_CRF_NER_MAPPING = OrderedDict(
 
     [
         (RobertaConfig, RobertaCrfForNer),
-        (BertConfig, BertCrfWithBN)
+        (BertConfig, BertSpanNerBN)
     ]
 )
 
@@ -66,7 +66,7 @@ class AutoModelForCrfNer:
         #     return BertCrfWithBN.from_pretrained(pretrained_model_name_or_path,
         #                                          *model_args, config=config,
         #                                          **kwargs)
-        return BertCrfWithBN.from_pretrained(pretrained_model_name_or_path,
+        return BertSpanNerBN.from_pretrained(pretrained_model_name_or_path,
                                              *model_args, config=config,
                                              **kwargs)
 

@@ -17,8 +17,8 @@ import sys
 
 sys.path.append('../')
 
+import os
 import fitlog
-from utils.utils_metrics import get_entities_bio, f1_score, classification_report
 from torch.nn import CrossEntropyLoss
 from torch.utils.data import DataLoader, RandomSampler, SequentialSampler
 from tqdm import tqdm, trange
@@ -39,10 +39,116 @@ TOKENIZER_ARGS = ["do_lower_case", "strip_accents", "keep_accents", "use_fast"]
 trans_list = ["CrossCategory", "EntityTyposSwap", "OOV"]
 
 
+def get_args():
+    parser = arg_parse()
+
+    # Required parameters
+    parser.add_argument(
+        "--data_dir",
+        default="/root/RobustNER/data/conll2003/origin/",
+        # default="/root/RobustNER/data/debug/",
+        type=str,
+        help="The input data dir. Should contain the training files for the "
+             "CoNLL-2003 NER task.",
+    )
+    parser.add_argument(
+        "--output_dir",
+        default="/root/RobustNER/out/bert_uncase/debug/",
+        type=str,
+        help="The output directory where the model predictions and "
+             "checkpoints will be written.",
+    )
+
+    parser.add_argument(
+        "--mode", default='bn', type=str,
+        help="bn for information bottleneck, oov for out of distribution, "
+             "cc for cross category."
+    )
+
+    # Other parameters
+    parser.add_argument("--gpu_id", default=6, type=int,
+                        help="GPU number id")
+
+    parser.add_argument(
+        "--epoch", default=10, type=float,
+        help="Total number of training epochs to perform."
+    )
+
+    parser.add_argument(
+        "--hidden_dim", default=50, type=int,
+        help="bottleneck encoder out dim"
+    )
+
+    parser.add_argument(
+        "--beta", default=0, type=float,
+        help="weights of p(z|v) norm regular, 0 represents not use"
+    )
+
+    parser.add_argument(
+        "--mi_estimator", default='VIB', type=str,
+        help="MI estimator for I(X;Z), support VIB, CLUB"
+    )
+
+    # I(Z; Y) parameters
+    parser.add_argument(
+        "--sample_size", default=5, type=int,
+        help="sample num from p(z|x)"
+    )
+
+    parser.add_argument(
+        "--alpha", default=1e-3, type=float,
+        help="weights of kl div of p(y|v) and p(y|z)"
+    )
+
+    parser.add_argument(
+        "--gama", default=1e-3, type=float,
+        help="weights of oov regular"
+    )
+
+    parser.add_argument(
+        "--theta", default=1e-3, type=float,
+        help="weights of cross category regular"
+    )
+
+    # negative sample build mode
+    parser.add_argument(
+        "--rep_mode", default="typos",
+        help="which strategy to replace entity, support typos and ngram now."
+    )
+
+    parser.add_argument(
+        "--pmi_json", default='/root/RobustNER/data/conll2003/pmi.json'
+    )
+    parser.add_argument(
+        "--pmi_preserve", default=0.3, type=float,
+        help="what extent of PMI ranking subword preserve."
+    )
+
+    # training parameters
+    parser.add_argument("--batch_size", default=64, type=int,
+                        help="Batch size per GPU/CPU for training.")
+
+    parser.add_argument("--do_train", action="store_true",
+                        help="Whether to run training.")
+    parser.add_argument("--do_eval", action="store_true",
+                        help="Whether to run eval on the dev set.")
+    parser.add_argument("--do_predict", action="store_true",
+                        help="Whether to run predictions on the test set.")
+    parser.add_argument("--do_robustness_eval", action="store_true",
+                        help="Whether to evaluate robustness")
+
+    parser.add_argument(
+        "--evaluate_during_training",
+        default=True,
+        help="Whether to run evaluation during training at each logging step.",
+    )
+
+    return arg_process(parser.parse_args())
+
+
 def train(args, model, tokenizer, labels, pad_token_label_id):
     """ Train the model """
     train_examples = load_and_cache_examples(args, mode="train")
-    tb_writer = SummaryWriter(args.output_dir)
     training_steps = (len(train_examples) - 1 / args.epoch + 1) * args.epoch
 
     # Prepare optimizer and schedule (linear warmup and decay)
@@ -69,10 +175,6 @@ def train(args, model, tokenizer, labels, pad_token_label_id):
         train_dataset = get_ds_features(args, train_examples, tokenizer,
                                         labels, pad_token_label_id)
 
-        # mask mode
-        # train_dataset = get_mask_ds_features(args, train_examples, tokenizer,
-        #                                      labels, pad_token_label_id)
-
         train_sampler = RandomSampler(train_dataset)
         train_dataloader = DataLoader(train_dataset,
                                       sampler=train_sampler,
@@ -84,10 +186,8 @@ def train(args, model, tokenizer, labels, pad_token_label_id):
         for step, batch in enumerate(epoch_iterator):
             model.train()
             batch = tuple(t.to(args.device) for t in batch)
-            # for ind in batch:
-            #     print(ind)
+
             # typos constraint training
-            
             # pos batch:
             # 0all_input_ids, 1all_input_mask, 2all_valid_mask, 3all_segment_ids, 4all_label_ids, 
             # 5all_span_idxs_ltoken, 6morph_idxs, 7span_label_ltoken, 8all_span_lens, 
@@ -103,18 +203,17 @@ def train(args, model, tokenizer, labels, pad_token_label_id):
                       "token_type_ids": batch[3],
                       "labels": batch[4],
 
-                      "trans_input_ids": batch[12],
-                      "trans_attention_mask": batch[13],
-                      "trans_valid_mask": batch[14],
-                      "trans_token_type_ids": batch[15],
-
                       "span_idxs_ltoken": batch[5],
                       "morph_idxs": batch[6],
                       "span_label_ltoken": batch[7],
                       "span_lens": batch[8],
                       "span_weights": batch[9],
                       "real_span_mask_ltoken": batch[10],
-                    #   "span_idxs": batch[11],
+
+                      "trans_input_ids": batch[12],
+                      "trans_attention_mask": batch[13],
+                      "trans_valid_mask": batch[14],
+                      "trans_token_type_ids": batch[15],
 
                       "trans_span_idxs_ltoken": batch[17],
                       "trans_morph_idxs": batch[18],
@@ -122,19 +221,19 @@ def train(args, model, tokenizer, labels, pad_token_label_id):
                       "trans_span_lens": batch[20],
                       "trans_span_weights": batch[21],
                       "trans_real_span_mask_ltoken": batch[22],
-                    #   "trans_span_idxs": batch[23]
                       }
 
             outputs = model(**inputs)
-            # loss_dic = outputs[0]
-            loss = outputs['loss']
+            loss_dic = outputs[0]
+            loss = loss_dic['loss']
             loss.backward()
 
             fitlog.add_loss(loss.tolist(), name="Loss", step=global_step)
             tr_loss += loss.item()
-            # description = "".join(["{0}:{1}, ".format(k, round(v.item(), 3)) for k, v in loss_dic.items()]).strip(', ')
+            description = "".join(["{0}:{1}, ".format(k, round(v.item(), 3))
+                                   for k, v in loss_dic.items()]).strip(', ')
+            epoch_iterator.set_description(description)
 
-            # epoch_iterator.set_description(description)
             # clip gradients
             torch.nn.utils.clip_grad_norm_(model.parameters(), args.max_grad_norm)
 
@@ -144,27 +243,25 @@ def train(args, model, tokenizer, labels, pad_token_label_id):
             global_step += 1
 
             if global_step % len(train_dataloader) == 0:
-                tb_writer.add_scalar("lr", scheduler.get_lr()[0], global_step)
-                tb_writer.add_scalar("loss", (tr_loss - logging_loss) / len(train_dataloader), global_step)
-                logging_loss = tr_loss
 
                 if args.evaluate_during_training:
-                    results, dev_outputs = evaluate(args, model, tokenizer, labels, pad_token_label_id, mode="dev",
-                                          prefix="{}".format(global_step))
+                    results, dev_outputs = evaluate(
+                        args, model, tokenizer, labels, pad_token_label_id,
+                        mode="dev", prefix="{}".format(global_step)
+                    )
                     weighted_score = results['span_f1']
 
                     # TODO, add dev mode
                     if args.do_robustness_eval and epoch_num > 5:
-                        robust_f1 = robust_evaluate(args, args.output_dir, None, labels,
-                            pad_token_label_id, prefix="{}".format(global_step), model=model, tokenizer=tokenizer)
+                        robust_f1 = robust_evaluate(
+                            args, args.output_dir, None, labels,
+                            pad_token_label_id, prefix="{}".format(global_step),
+                            model=model, tokenizer=tokenizer
+                        )
                         # select best ckpt base weighted f1 score
                         weighted_score = 0.35 * results['span_f1'] + 0.65 * robust_f1
                     else:
                         weighted_score *= weighted_score
-
-                    # for key, value in results.items():
-                    #     if isinstance(value, float) or isinstance(value, int):
-                    #         tb_writer.add_scalar("eval_{}".format(key), value, global_step)
 
                     if best_score < weighted_score:
                         best_score = weighted_score
@@ -172,8 +269,6 @@ def train(args, model, tokenizer, labels, pad_token_label_id):
                     else:
                         output_dir = args.output_dir
                     model_save(args, output_dir, model, tokenizer)
-
-    tb_writer.close()
 
     return global_step, tr_loss / global_step
 
@@ -196,8 +291,6 @@ def evaluate(args, model, tokenizer, labels, pad_token_label_id, mode,
     logger.info("  Num examples = %d", len(eval_dataset))
     logger.info("  Batch size = %d", args.eval_batch_size)
     nb_eval_steps = 0
-    preds = None
-    trues = None
     dev_outputs = []
     model.eval()
 
@@ -220,50 +313,50 @@ def evaluate(args, model, tokenizer, labels, pad_token_label_id, mode,
                       "decode": True
                       }
             # without labels, direct out tags
-            outputs = model(**inputs)
-            pred = outputs['pred']
+            predicts = model(**inputs)
             # span_f1_prune(all_span_idxs, predicts, span_label_ltoken, real_span_mask_ltoken)
-            span_f1s,pred_label_idx = span_f1_prune(
+            span_f1s, pred_label_idx = span_f1_prune(
                 batch[11], 
-                pred, 
+                predicts[0],
                 batch[7], 
-                batch[10])
-            outputs['span_f1s'] = span_f1s
-            outputs['pred_label_idx'] = pred_label_idx
-            outputs['all_span_idxs'] = batch[11]
-            outputs['span_label_ltoken'] = batch[7]
-
-            # batch_preds = get_predict_prune(self.args, all_span_word, words, pred_label_idx, batch[7],
-            #                                    batch[11])
-            # outputs["batch_preds"] =batch_preds        
-            # outputs['all_span_word'] = all_span_word
+                batch[10]
+            )
+            outputs = {
+                'span_f1s': span_f1s,
+                'pred_label_idx': pred_label_idx,
+                'all_span_idxs': batch[11],
+                'span_label_ltoken': batch[7]
+            }
             dev_outputs.append(outputs)
             
         nb_eval_steps += 1
 
-        # if preds is None:
-        #     preds = tags.detach().cpu().numpy()
-        #     trues = batch[4].detach().cpu().numpy()
-        # else:
-        #     preds = np.append(preds, tags.detach().cpu().numpy(), axis=0)
-        #     trues = np.append(trues, batch[4].detach().cpu().numpy(), axis=0)
-
     all_counts = torch.stack([x[f'span_f1s'] for x in dev_outputs]).sum(0)
     correct_pred, total_pred, total_golden = all_counts
     print('correct_pred, total_pred, total_golden: ', correct_pred, total_pred, total_golden)
-    precision =correct_pred / (total_pred+1e-10)
+    precision = correct_pred / (total_pred + 1e-10)
     recall = correct_pred / (total_golden + 1e-10)
     f1 = precision * recall * 2 / (precision + recall + 1e-10)
 
-    print("span_precision: ", precision)
-    print("span_recall: ", recall)
-    print("span_f1: ", f1)
-    res = {}
-    res['span_precision'] = precision
-    res['span_recall'] = recall
-    res['span_f1'] = f1
+    res = {
+        'span_precision': precision,
+        'span_recall': recall,
+        'span_f1': f1
+    }
+    logger.info("{0} metric is {1}".format(prefix, res))
 
-    # outputs is a dict, outputs.keys is {'span_f1', 'pred', 'pred_label_idx', 'all_span_idxs', 'span_label_ltoken'}
+    # save metrics result
+    output_eval_file = os.path.join(args.output_dir, "eval_results.txt")
+    if not os.path.exists(args.output_dir):
+        os.makedirs(args.output_dir)
+
+    with open(output_eval_file, "a") as writer:
+        logger.info("***** Eval results {0} {1} *****".format(mode, prefix))
+        writer.write("***** Eval results {0} {1} *****\n".format(mode, prefix))
+        for key in sorted(res.keys()):
+            logger.info("{} = {}".format(key, str(res[key])))
+            writer.write("{} = {}\n".format(key, str(res[key])))
+
     return res, dev_outputs # dev_outputs is a list of outputs, which is [outputs1, outputs2 ... ]
 
 
@@ -275,9 +368,6 @@ def robust_evaluate(args, ckpt_dir, tokenizer_args, labels, pad_token_label_id,
 
     # eval best checkpoint
     for trans in trans_list:
-        logger.info(
-            "Start evaluate Robustness of {0} {1} transformation".format(prefix, trans)
-        )
         trans_dir = os.path.join(base_dir, trans, "trans")
         assert os.path.exists(trans_dir)
         results, predictions = fast_evaluate(
@@ -330,129 +420,9 @@ def fast_evaluate(args, ckpt_dir, tokenizer_args, labels, pad_token_label_id,
     return results, predictions
 
 
-# main parameters
-def get_args():
-    parser = arg_parse()
-
-    # Required parameters
-    parser.add_argument(
-        "--data_dir",
-        default="/root/RobustNER/data/conll2003/origin/",
-        # default="/root/RobustNER/data/debug/",
-        type=str,
-        help="The input data dir. Should contain the training files for the "
-             "CoNLL-2003 NER task.",
-    )
-    parser.add_argument(
-        "--output_dir",
-        default="/root/RobustNER/out/bert_uncase/debug/",
-        type=str,
-        help="The output directory where the model predictions and "
-             "checkpoints will be written.",
-    )
-    # Other parameters
-    parser.add_argument("--gpu_id", default=0, type=int,
-                        help="GPU number id")
-
-    parser.add_argument(
-        "--epoch", default=10, type=float,
-        help="Total number of training epochs to perform."
-    )
-    parser.add_argument(
-        "--hidden_dim", default=300, type=int,
-        help="post encoder out dim"
-    )
-
-    # I(Z; context) parameters
-    parser.add_argument("--regular_context", action="store_false",
-                        help="Whether add I(z, context) regular.")
-
-    parser.add_argument("--theta", default=1e-4, type=float,
-                        help="theta params")
-
-    # I(X; Z) parameters
-    parser.add_argument("--regular_z", action="store_false",
-                        help="Whether add I(x, z) regular.")
-
-    parser.add_argument("--regular_norm", action="store_false",
-                        help="Whether add I(z|x, N) regular.")
-
-    parser.add_argument(
-        "--beta", default=5e-5, type=float,
-        help="beta params."
-    )
-
-    parser.add_argument(
-        "--mi_estimator", default='VIB', type=str,
-        help="MI estimator for I(X;Z), support VIB, CLUB"
-    )
-
-    # I(Z; Y) parameters
-    parser.add_argument(
-        "--sample_size", default=5, type=int,
-        help="sample num from p(z|x)"
-    )
-
-    # I(X_i ; Z_i | Z_(j!=i))
-    parser.add_argument(
-        "--regular_entity", action="store_false",
-        help="whether add entity regular item."
-    )
-
-    parser.add_argument(
-        "--gama", default=1e-3, type=float,
-        help="gama params."
-    )
-
-    parser.add_argument(
-        "--entity_mi_estimator", default='vCLUB', type=str,
-        help="MI estimator for entity and its encoding representation"
-    )
-
-    # context
-
-    # negative sample build mode
-    parser.add_argument(
-        "--rep_mode", default="typos",
-        help="which strategy to replace entity, support typos and ngram now."
-    )
-    parser.add_argument(
-        "--rep_total", action="store_false",
-        help="whether replace full entity token or its subword."
-    )
-    parser.add_argument(
-        "--pmi_json", default='/root/RobustNER/data/conll2003/pmi.json'
-    )
-    parser.add_argument(
-        "--pmi_preserve", default=0.2, type=float,
-        help="what extent of PMI ranking subword preserve."
-    )
-
-    # training parameters
-    parser.add_argument("--batch_size", default=64, type=int,
-                        help="Batch size per GPU/CPU for training.")
-
-    parser.add_argument("--do_train", action="store_true",
-                        help="Whether to run training.")
-    parser.add_argument("--do_eval", action="store_true",
-                        help="Whether to run eval on the dev set.")
-    parser.add_argument("--do_predict", action="store_true",
-                        help="Whether to run predictions on the test set.")
-    parser.add_argument("--do_robustness_eval", action="store_true",
-                        help="Whether to evaluate robustness")
-
-    parser.add_argument(
-        "--evaluate_during_training",
-        default=True,
-        help="Whether to run evaluation during training at each logging step.",
-    )
-
-    return arg_process(parser.parse_args())
-
-
 def main():
     args = get_args()
-    set_seed(args) # Added here for reproductibility
+    set_seed(args)  # Added here for reproductibility
 
     # Setup logging
     logging.basicConfig(
@@ -469,15 +439,13 @@ def main():
     # Use cross entropy ignore index as padding label id
     pad_token_label_id = CrossEntropyLoss().ignore_index
     args.model_type = args.model_type.lower()
-    print(args.model_type)
 
     config = AutoConfig.from_pretrained(
         args.config_name if args.config_name else args.model_name_or_path,
         num_labels=num_labels,
         id2label={str(i): label for i, label in enumerate(labels)},
         label2id={label: i for i, label in enumerate(labels)},
-        cache_dir=None,
-        output_hidden_states=True
+        cache_dir=None
     )
 
     #####

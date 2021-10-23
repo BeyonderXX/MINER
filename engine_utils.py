@@ -149,22 +149,18 @@ def prepare_optimizer_scheduler(args, model, training_steps):
     no_decay = ["bias", "LayerNorm.weight"]
 
     bert_parameters = eval('model.{}'.format(args.model_type)).named_parameters()
-    crf_parameters = model.decoder.named_parameters()
-    other_parameters = list(model.classifier.named_parameters()) \
 
-
-    if not args.baseline:
-        other_parameters = other_parameters \
-                           + list(model.entity_regularizer.named_parameters())\
-                           + [("r_mean", model.r_mean)] + [("r_log_var", model.r_log_var)] \
-                           + list(model.post_encoder.named_parameters())
-
-        # 加入 context regular 参数
-        other_parameters += list(model.context_regularizer.named_parameters())
+    other_parameters = list(model.bn_encoder.named_parameters())\
+                        + list(model.oov_reg.named_parameters())\
+                        + list(model.start_outputs.named_parameters())\
+                        + list(model.end_outputs.named_parameters())\
+                        + list(model.span_extractor.named_parameters())\
+                        + list(model.span_classifier.named_parameters())\
+                        + list(model.spanLen_embedding.named_parameters())\
+                        + list(model.morph_embedding.named_parameters())
 
     args.bert_lr = args.bert_lr if args.bert_lr else args.learning_rate
     args.classifier_lr = args.classifier_lr if args.classifier_lr else args.learning_rate
-    args.crf_lr = args.crf_lr if args.crf_lr else args.learning_rate
 
     optimizer_grouped_parameters = [
         # other params
@@ -185,16 +181,7 @@ def prepare_optimizer_scheduler(args, model, training_steps):
                     any(nd in n for nd in no_decay)],
          "weight_decay": 0.0,
          "lr": args.bert_lr},
-
-        # crf params
-        {"params": [p for n, p in crf_parameters if not any(nd in n for nd in no_decay)],
-         "weight_decay": args.weight_decay,
-         "lr": args.crf_lr},
-        {"params": [p for n, p in crf_parameters if any(nd in n for nd in no_decay)],
-         "weight_decay": 0.0,
-         "lr": args.crf_lr},
     ]
-
 
     optimizer = AdamW(optimizer_grouped_parameters, lr=args.learning_rate, eps=args.adam_epsilon)
     scheduler = get_linear_schedule_with_warmup(
@@ -214,8 +201,6 @@ def prepare_optimizer_scheduler(args, model, training_steps):
 
 def load_and_cache_examples(args, mode, data_dir=None):
     data_dir = args.data_dir if data_dir is None else data_dir
-    # ***********create online features*****************
-    logger.info("Creating features from dataset file at %s", data_dir)
     # 读文件
     examples = read_examples_from_file(data_dir, mode)
     # 将输入转为模型输入数值
@@ -230,12 +215,9 @@ def get_ds_features(args, examples, tokenizer, labels, pad_token_label_id):
     # print('def get_ds_features()-end')
 
     neg_examples = build_typos_neg_examples(examples, tokenizer,
-                                            neg_total=args.rep_total,
-                                            neg_mode=args.rep_mode,
-                                            pmi_json=args.pmi_json,
-                                            preserve_ratio=args.pmi_preserve)
-    neg_features = dataset_2_features(args, neg_examples, tokenizer, labels, pad_token_label_id, log_prefix='negative')
-
+                                            pmi_json=args.pmi_json)
+    neg_features = dataset_2_features(args, neg_examples, tokenizer, labels,
+                                      pad_token_label_id, log_prefix='negative')
 
     return TensorDataset(
         *features,
@@ -269,8 +251,6 @@ def dataset_2_features(args, examples, tokenizer, labels, pad_token_label_id, lo
         cls_token_segment_id=2 if args.model_type in ["xlnet"] else 0,
         sep_token=tokenizer.sep_token,
         sep_token_extra=bool(args.model_type in ["roberta"]),
-        # roberta uses an extra separator b/w pairs of sentences,
-        # cf. github.com/pytorch/fairseq/commit/1684e166e3da03f5b600dbb7855cb98ddfcd0805
         pad_on_left=bool(args.model_type in ["xlnet"]),
         # pad on the left for xlnet
         pad_token=tokenizer.pad_token_id,
@@ -292,19 +272,34 @@ def dataset_2_features(args, examples, tokenizer, labels, pad_token_label_id, lo
     all_label_ids = torch.tensor([f.label_ids for f in features],
                                  dtype=torch.long)
 
+    # subword (begin, end) index
     all_span_idxs_ltoken = torch.LongTensor([f.all_span_idxs_ltoken for f in features])
+
+    # TODO， input_musk 生成
+    # 区分 padding span
     real_span_mask_ltoken = torch.LongTensor([f.real_span_mask_ltoken for f in features])
+
+    # subword label
     span_label_ltoken = torch.LongTensor([f.span_label_ltoken for f in features])
+
+    # (max_span_len * max_sent_len)
     all_span_lens = torch.LongTensor([f.all_span_lens for f in features])
+
+    # (max_span_len * max_sent_len)
+    # {'isupper': 1, 'islower': 2, 'istitle': 3, 'isdigit': 4, 'other': 5}
     morph_idxs = torch.LongTensor([f.morph_idxs for f in features])
+
+    # TODO, label 生成
+    # (max_span_len * max_sent_len), O 为 0.5 其他为 1
     all_span_weights = torch.Tensor([f.all_span_weights for f in features])
-    # all_span_word = [f.all_span_word for f in features]
+
+    # (max_span_len * max_sent_len, 2)
+    # TODO, valid mask + idxs_ltoken 生成
     all_span_idxs = torch.LongTensor([f.all_span_idxs for f in features])
 
-    # return all_input_ids, all_input_mask, all_valid_mask, all_segment_ids, all_label_ids, all_span_idxs_ltoken, morph_idxs, span_label_ltoken, all_span_lens, all_span_weights, real_span_mask_ltoken, all_span_word, all_span_idxs
-    
     # 0all_input_ids, 1all_input_mask, 2all_valid_mask, 3all_segment_ids, 4all_label_ids, 5all_span_idxs_ltoken, 6morph_idxs, 7span_label_ltoken, 8all_span_lens, 9all_span_weights, 10real_span_mask_ltoken, 11all_span_idxs
     return all_input_ids, all_input_mask, all_valid_mask, all_segment_ids, all_label_ids, all_span_idxs_ltoken, morph_idxs, span_label_ltoken, all_span_lens, all_span_weights, real_span_mask_ltoken, all_span_idxs
+
 
 def resuming_training(args, train_dataloader):
     epochs_trained = 0
@@ -343,6 +338,7 @@ def model_save(args, output_dir, model, tokenizer):
     logger.info("Saving model checkpoint to %s", output_dir)
 
 
+# TODO, fit other dataset
 # save predictions result
 def predictions_save(origin_file, predictions, output_file):
     
