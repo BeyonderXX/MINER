@@ -339,9 +339,9 @@ def evaluate(args, model, tokenizer, labels, pad_token_label_id, mode,
     f1 = precision * recall * 2 / (precision + recall + 1e-10)
 
     res = {
-        'span_precision': precision,
-        'span_recall': recall,
-        'span_f1': f1
+        'span_precision': round(precision.cpu().numpy().tolist(), 5),
+        'span_recall': round(recall.cpu().numpy().tolist(), 5),
+        'span_f1': round(f1.cpu().numpy().tolist(), 5)
     }
     logger.info("{0} metric is {1}".format(prefix, res))
 

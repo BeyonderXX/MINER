@@ -176,10 +176,14 @@ class vCLUB(UpperBound):
 
 # TODO
 class InfoNCE(nn.Module):
-    def __init__(self, x_dim, y_dim, max_seq_len, device=None):
+    def __init__(self, x_dim, y_dim, device=None):
         super(InfoNCE, self).__init__()
-        self.lower_size = 300
-        self.set_com_score_fun(x_dim, y_dim, max_seq_len)
+        self.lower_size = 100
+        # self.set_com_score_fun(x_dim, y_dim, max_seq_len)
+        self.F_func =  nn.Sequential(nn.Linear(x_dim + y_dim, self.lower_size),
+                                   nn.ReLU(),
+                                   nn.Linear(self.lower_size, 1),
+                                   nn.Softplus())
         self.device = device
 
     def set_com_score_fun(self, x_dim, y_dim, max_seq_len):
@@ -288,6 +292,10 @@ class InfoNCE(nn.Module):
             mi_losses += mi_loss
 
         return mi_losses
+
+    def span_mi_loss(self, x_spans, y_spans, x_weights, y_weights):
+        x_entity_spans = x_spans[torch.where(x_weights > 0.5)]
+        x_entity
 
 
 def kl_div(param1, param2):

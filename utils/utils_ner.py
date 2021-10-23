@@ -486,18 +486,6 @@ def example_to_feature(
     
     morph_idxs = case_feature_tokenLevel(morph2idx, all_span_idxs, example.words, max_spanLen)
 
-
-    # print('\nword:')
-    # print(example.words)
-    # print('example.labels:')
-    # print(example.labels)
-    # print('label_ids:')
-    # print(label_ids)
-    # print('valid_mask:')
-    # print(valid_mask)
-    # print('all_span_idxs:')
-    # print(all_span_idxs)
-
     all_span_idxs_ltoken, all_span_word, span_label_ltoken = convert2tokenIdx(
                 example.words, valid_mask, all_span_idxs, seidxs_format)
 
