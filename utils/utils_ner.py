@@ -608,7 +608,6 @@ def collate_fn(batch):
 
     max_len = batch_lens.max().item()
     sub_max_len = sub_batch_lens.max().item()
-
     max_span_len = min(502, 4 * max_len - 6)
 
 
@@ -618,7 +617,6 @@ def collate_fn(batch):
 
     neg_max_len = neg_batch_lens.max().item()
     neg_sub_max_len = neg_sub_batch_lens.max().item()
-
     neg_max_span_len = min(502, 4 * neg_max_len - 6)
 
     results = ()
@@ -642,8 +640,7 @@ def collate_fn(batch):
                 results += (batch_tuple[i][:, :max_span_len], )
         else:
             results += (batch_tuple[i],)
-        # print('\n')
-        # print(results[i].size())
+
     return results
 
 

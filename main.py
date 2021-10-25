@@ -110,6 +110,11 @@ def get_args():
         help="weights of cross category regular"
     )
 
+    parser.add_argument(
+        "--r", default=1e-4, type=float,
+        help="weights of I(z1; z2)"
+    )
+
     # negative sample build mode
     parser.add_argument(
         "--rep_mode", default="typos",

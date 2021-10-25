@@ -179,11 +179,10 @@ class InfoNCE(nn.Module):
     def __init__(self, x_dim, y_dim, device=None):
         super(InfoNCE, self).__init__()
         self.lower_size = 100
-        # self.set_com_score_fun(x_dim, y_dim, max_seq_len)
-        self.F_func =  nn.Sequential(nn.Linear(x_dim + y_dim, self.lower_size),
-                                   nn.ReLU(),
-                                   nn.Linear(self.lower_size, 1),
-                                   nn.Softplus())
+        self.F_func = nn.Sequential(nn.Linear(x_dim + y_dim, self.lower_size),
+                                    nn.ReLU(),
+                                    nn.Linear(self.lower_size, 1),
+                                    nn.Softplus())
         self.device = device
 
     def set_com_score_fun(self, x_dim, y_dim, max_seq_len):
@@ -197,19 +196,17 @@ class InfoNCE(nn.Module):
     def forward(self, x_samples, y_samples):  # samples have shape [sample_size, dim]
         # shuffle and concatenate
         sample_size = y_samples.shape[0]
-        random_index = torch.randint(sample_size, (sample_size,)).long()
 
-        x_tile = x_samples.unsqueeze(0).repeat((sample_size, 1, 1))
         y_tile = y_samples.unsqueeze(1).repeat((1, sample_size, 1))
+        x_tile = x_samples.unsqueeze(0).repeat((sample_size, 1, 1))
 
         T0 = self.F_func(torch.cat([x_samples, y_samples], dim=-1))
         T1 = self.F_func(torch.cat([x_tile, y_tile], dim=-1))  # [s_size, s_size, 1]
 
-        lower_bound = T0.mean() - (
-                    T1.logsumexp(dim=1).mean() - np.log(sample_size))  # torch.log(T1.exp().mean(dim = 1)).mean()
+        lower_bound = T0 - T1.logsumexp(dim=1)  # torch.log(T1.exp().mean(dim = 1)).mean()
 
         # compute the negative loss (maximise loss == minimise -loss)
-        return lower_bound
+        return lower_bound.sum()
 
     def mi_loss(self, encode_out, bert_embed, labels):
         """
@@ -293,9 +290,27 @@ class InfoNCE(nn.Module):
 
         return mi_losses
 
-    def span_mi_loss(self, x_spans, y_spans, x_weights, y_weights):
-        x_entity_spans = x_spans[torch.where(x_weights > 0.5)]
-        x_entity
+    # TODO
+    def span_mi_loss(self, x_spans, x_span_idxes, y_spans, y_span_idxes):
+        """
+
+        :param x_spans: (bsz, span_num, dim)
+        :param x_span_idxes: (bsz)
+        :param y_spans: (bsz, span_num, dim)
+        :param y_span_idxes: (bsz)
+        :return:
+        """
+        bsz, _, dim = x_spans.shape
+        x_span_idxes = x_span_idxes.unsqueeze(1).unsqueeze(1).repeat(1, 1, dim)
+        y_span_idxes = y_span_idxes.unsqueeze(1).unsqueeze(1).repeat(1, 1, dim)
+
+        x_spans_con = x_spans.gather(1, x_span_idxes).squeeze()
+        y_spans_con = y_spans.gather(1, y_span_idxes).squeeze()
+
+        info_nce_loss = self.forward(x_spans_con, y_spans_con)
+
+        return info_nce_loss * -1
+
 
 
 def kl_div(param1, param2):
