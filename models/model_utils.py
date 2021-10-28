@@ -59,6 +59,8 @@ def get_random_span(x_span, x_weights, y_span, y_weights,
             span_idx[0] = 0
             span_idx[1] = 0
         else:
+            #span_idx[0] = random.choice(span_idx[0])
+            #span_idx[1] = random.choice(span_idx[1])
             index = random.choice(range(len(span_idx[0])))
             span_idx[0] = span_idx[0][index]
             span_idx[1] = span_idx[1][index]

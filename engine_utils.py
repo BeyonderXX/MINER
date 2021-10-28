@@ -80,13 +80,14 @@ def arg_parse():
 
     parser.add_argument("--loss_type", default="lsr", type=str,
                         help="The loss function to optimize.")
-    parser.add_argument("--learning_rate", default=5e-4, type=float,
+    parser.add_argument("--learning_rate", default=5e-5, type=float,
                         help="The initial learning rate for Adam.")
-
     parser.add_argument("--bert_lr", default=5e-5, type=float,
                         help="The initial learning rate for BERT.")
     parser.add_argument("--classifier_lr", default=5e-5, type=float,
                         help="The initial learning rate of classifier.")
+    parser.add_argument("--crf_lr", default=1e-3, type=float,
+                        help="The initial learning rate of crf")
 
     parser.add_argument("--weight_decay", default=0.0, type=float,
                         help="Weight decay if we apply some.")
@@ -156,14 +157,11 @@ def prepare_optimizer_scheduler(args, model, training_steps):
                         + list(model.span_extractor.named_parameters())\
                         + list(model.span_classifier.named_parameters())\
                         + list(model.spanLen_embedding.named_parameters())\
-                        + list(model.morph_embedding.named_parameters())\
-                        + list(model.z_reg.named_parameters())
+                        + list(model.morph_embedding.named_parameters())
+                        # + list(model.z_reg.named_parameters()) \
 
-    # args.bert_lr = args.bert_lr if args.bert_lr else args.learning_rate
-    # args.classifier_lr = args.classifier_lr if args.classifier_lr else args.learning_rate
-
-    args.bert_lr = args.learning_rate
-    args.classifier_lr = args.learning_rate
+    args.bert_lr = args.bert_lr if args.bert_lr else args.learning_rate
+    args.classifier_lr = args.classifier_lr if args.classifier_lr else args.learning_rate
 
     optimizer_grouped_parameters = [
         # other params

@@ -194,21 +194,9 @@ class InfoNCE(nn.Module):
             setattr(self, "com_score_fun_{0}".format(i), F_func)
 
     def forward(self, x_samples, y_samples):  # samples have shape [sample_size, dim]
-        # # shuffle and concatenate
-        # sample_size = y_samples.shape[0]
-        #
-        # y_tile = y_samples.unsqueeze(1).repeat((1, sample_size, 1))
-        # x_tile = x_samples.unsqueeze(0).repeat((sample_size, 1, 1))
-        #
-        # T0 = self.F_func(torch.cat([x_samples, y_samples], dim=-1))
-        # T1 = self.F_func(torch.cat([x_tile, y_tile], dim=-1))  # [s_size, s_size, 1]
-        #
-        # lower_bound = T0 - T1.logsumexp(dim=1)  # torch.log(T1.exp().mean(dim = 1)).mean()
-        #
-        # # compute the negative loss (maximise loss == minimise -loss)
-        # return lower_bound.sum()
         # shuffle and concatenate
         sample_size = y_samples.shape[0]
+        random_index = torch.randint(sample_size, (sample_size,)).long()
 
         x_tile = x_samples.unsqueeze(0).repeat((sample_size, 1, 1))
         y_tile = y_samples.unsqueeze(1).repeat((1, sample_size, 1))
@@ -217,25 +205,9 @@ class InfoNCE(nn.Module):
         T1 = self.F_func(torch.cat([x_tile, y_tile], dim=-1))  # [s_size, s_size, 1]
 
         lower_bound = T0 - T1.logsumexp(dim=1)  # torch.log(T1.exp().mean(dim = 1)).mean()
-        # print('------')
-        # print('lower_bound_fast: {}'.format(lower_bound.sum()))
-        #
-        # T0 = torch.zeros(1, dtype=torch.float64).to(self.device)
-        # T1 = torch.zeros((sample_size, sample_size), dtype=torch.float64).to(self.device)
-        #
-        # for i in range(sample_size):
-        #     T0 += self.F_func(torch.cat([x_samples[i], y_samples[i]], dim=-1)).to(self.device)
-        #     for j in range(sample_size):
-        #         T1[i][j] = self.F_func(torch.cat([x_samples[j], y_samples[i]], dim=-1)).exp().to(self.device)
-        #
-        # # lower_bound2 = T0 - sample_size * torch.log(T1.sum())
-        #
-        # lower_bound2 = T0 - torch.log(T1.sum(dim=-1)).sum()
-        # print('lower_bound2: {}'.format(lower_bound2[0]))
-        #
-        # # compute the negative loss (maximise loss == minimise -loss)
-        return lower_bound.sum()
 
+        # compute the negative loss (maximise loss == minimise -loss)
+        return lower_bound.sum()
 
     def mi_loss(self, encode_out, bert_embed, labels):
         """
