@@ -217,7 +217,7 @@ class BertSpanNerBN(BertPreTrainedModel):
             )
             loss_dict['oov'] = self.gama * entity_dist
 
-            # maximize I(z1, z2)
+            # # maximize I(z1, z2)
             x_span_idxes, y_span_idxes = get_random_span(mean, span_weights, switch_mean, trans_span_weights)
             entity_mi = self.r * self.z_reg.span_mi_loss(mean, x_span_idxes, switch_mean, y_span_idxes)
             loss_dict['mi'] = entity_mi

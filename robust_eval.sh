@@ -19,3 +19,20 @@ nohup python main.py --gpu_id 5 --output_dir /root/RobustNER/out/bn_oov_10_mi_e2
 
 
 nohup python main.py --gpu_id 1 --output_dir /root/RobustNER/out/bn_oov_1_mi_e3_r_e1/ --gama 1 --r 1e-1 --epoch 50 --rep_mode typos --batch_size 32 --do_train --do_eval --do_predict --do_robustness_eval > bn_oov_1_mi_e3_r_e1.log 2>&1 &
+
+
+nohup python -u main.py --gpu_id 4 --output_dir /root/RobustNER/out/bn_oov_1_mi_e2/ --gama 1 --r 1e-2 --epoch 1 --rep_mode typos --batch_size 32 --do_train > test.log 2>&1 &
+
+
+# MI debug, remove MI loss
+nohup python -u main.py --gpu_id 0 --output_dir /root/RobustNER/out/bn_oov_1_mi_test/ --gama 1 --epoch 50 --rep_mode typos --batch_size 32 --do_train > bn_oov_1_mi_test.log 2>&1 &
+
+# remove oov loss
+nohup python -u main.py --gpu_id 1 --output_dir /root/RobustNER/out/bn_mi_e2/ --r 1e-2 --epoch 50 --rep_mode typos --batch_size 32 --do_train > bn_mi_e2.log 2>&1 &
+# remove MI + oov loss
+nohup python -u main.py --gpu_id 1 --output_dir /root/RobustNER/out/bn_test/ --gama 0 --r 0 --epoch 50 --rep_mode typos --batch_size 32 --do_train --do_eval --do_predict --do_robustness_eval > bn_test.log 2>&1 &
+
+
+# revert test
+nohup python main.py --gpu_id 0 --output_dir /root/RobustNERCom_revert/out/bn_oov_1_mi_0/ --gama 1 --r 0 --epoch 40 --rep_mode typos --batch_size 64 --do_train --do_eval --do_predict --do_robustness_eval > bn_oov_1_mi_0.log 2>&1 &
+nohup python main.py --gpu_id 4 --output_dir /root/RobustNERCom_revert/out/bn_oov_1_mi_e4/ --gama 1 --r 1e-4 --epoch 40 --rep_mode typos --batch_size 64 --do_train --do_eval --do_predict --do_robustness_eval > bn_oov_1_mi_e4.log 2>&1 &

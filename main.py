@@ -273,7 +273,8 @@ def train(args, model, tokenizer, labels, pad_token_label_id):
                         output_dir = os.path.join(args.output_dir, "best_checkpoint")
                     else:
                         output_dir = args.output_dir
-                    model_save(args, output_dir, model, tokenizer)
+                    # TODO
+                    # model_save(args, output_dir, model, tokenizer)
 
     return global_step, tr_loss / global_step
 
@@ -464,16 +465,24 @@ def main():
         **tokenizer_args,
     )
 
-    # 可以只加载 预训练 模型, 也可以加载全部保存的参数
-    model = AutoModelForCrfNer.from_pretrained(
-        # args.output_dir,
-        args.model_name_or_path,
-        config=config,
-        cache_dir=None,
-        args=args
-    )
+    if 0: # for bug test
+        best_ckpt_dir = os.path.join(args.output_dir, "best_checkpoint")
+        model = AutoModelForCrfNer.from_pretrained(
+            best_ckpt_dir,
+            args=args
+        )
+        model.to(args.device)
+    else:
+        # 可以只加载 预训练 模型, 也可以加载全部保存的参数
+        model = AutoModelForCrfNer.from_pretrained(
+            # args.output_dir,
+            args.model_name_or_path,
+            config=config,
+            cache_dir=None,
+            args=args
+        )
 
-    model.to(args.device)
+        model.to(args.device)
 
     logger.info("Training/evaluation parameters %s", args)
     fitlog.add_hyper(args)  # 通过这种方式记录ArgumentParser的参数
