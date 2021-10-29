@@ -7,7 +7,8 @@ import logging
 import argparse
 
 from torch.utils.data import TensorDataset
-from utils.utils_ner import convert_examples_to_features, read_examples_from_file, build_typos_neg_examples, build_ent_mask_examples
+from utils.utils_ner import convert_examples_to_features, read_examples_from_file, \
+    build_typos_neg_examples, build_ent_mask_examples, get_labels
 
 from transformers import (
     AdamW,
@@ -16,7 +17,7 @@ from transformers import (
 
 
 logger = logging.getLogger(__name__)
-
+DEFAULT_LR = 5e-5
 
 def set_seed(args):
     random.seed(args.seed)
@@ -79,14 +80,11 @@ def arg_parse():
     )
     parser.add_argument("--loss_type", default="lsr", type=str,
                         help="The loss function to optimize.")
-    parser.add_argument("--learning_rate", default=5e-5, type=float,
-                        help="The initial learning rate for Adam.")
+
     parser.add_argument("--bert_lr", default=5e-5, type=float,
                         help="The initial learning rate for BERT.")
-    parser.add_argument("--classifier_lr", default=5e-5, type=float,
+    parser.add_argument("--lr", default=5e-5, type=float,
                         help="The initial learning rate of classifier.")
-    parser.add_argument("--crf_lr", default=1e-3, type=float,
-                        help="The initial learning rate of crf")
 
     parser.add_argument("--weight_decay", default=0.0, type=float,
                         help="Weight decay if we apply some.")
@@ -159,17 +157,17 @@ def prepare_optimizer_scheduler(args, model, training_steps):
                         + list(model.morph_embedding.named_parameters())
                     #   + list(model.z_reg.named_parameters())
 
-    args.bert_lr = args.bert_lr if args.bert_lr else args.learning_rate
-    args.classifier_lr = args.classifier_lr if args.classifier_lr else args.learning_rate
+    args.bert_lr = args.bert_lr if args.bert_lr else DEFAULT_LR
+    args.lr = args.lr if args.lr else DEFAULT_LR
 
     optimizer_grouped_parameters = [
         # other params
         {"params": [p for n, p in other_parameters if not any(nd in n for nd in no_decay)],
          "weight_decay": args.weight_decay,
-         "lr": args.classifier_lr},
+         "lr": args.lr},
         {"params": [p for n, p in other_parameters if any(nd in n for nd in no_decay)],
          "weight_decay": 0.0,
-         "lr": args.classifier_lr},
+         "lr": args.lr},
 
         # bert params
         {"params": [p for n, p in bert_parameters if
@@ -183,7 +181,7 @@ def prepare_optimizer_scheduler(args, model, training_steps):
          "lr": args.bert_lr},
     ]
 
-    optimizer = AdamW(optimizer_grouped_parameters, lr=args.learning_rate, eps=args.adam_epsilon)
+    optimizer = AdamW(optimizer_grouped_parameters, lr=args.lr, eps=args.adam_epsilon)
     scheduler = get_linear_schedule_with_warmup(
         optimizer, num_warmup_steps=args.warmup_steps, num_training_steps=training_steps
     )
@@ -340,13 +338,18 @@ def model_save(args, output_dir, model, tokenizer):
 
 # TODO, fit other dataset
 # save predictions result
-def predictions_save(origin_file, predictions, output_file):
+def predictions_save(origin_file, predictions, output_file, args):
     
     pred_label_idx = [x['pred_label_idx'].tolist() for x in predictions]
     all_span_idxs = [x['all_span_idxs'].tolist() for x in predictions]
     span_label_ltoken = [x['span_label_ltoken'].tolist() for x in predictions]
     
-    idx2label = {0:'O', 1:'ORG', 2:'PER', 3:'LOC', 4:'MISC'}
+    # idx2label = {0:'O', 1:'ORG', 2:'PER', 3:'LOC', 4:'MISC'}
+    idx2label = {}
+    labels = get_labels(args.labels)
+
+    for i in range(len(labels)):
+        idx2label[i] = labels[i]
 
     with open(output_file, "w") as writer:
         with open(origin_file, "r") as f:

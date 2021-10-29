@@ -15,9 +15,6 @@ class BertSpanNerBN(BertPreTrainedModel):
         args=None
     ):
         super(BertSpanNerBN, self).__init__(config)
-        # just support bn/oov/cc
-        assert args.mode in ['bn', 'oov', 'cc']
-        self.mode = args.mode
 
         # ---------------- encoder ------------------
         self.bert = BertModel(config)
@@ -84,6 +81,9 @@ class BertSpanNerBN(BertPreTrainedModel):
         # predict p(y|z), I(Z; Y) 部分（decoder部分）
         # TODO 加入 sample 机制
         self.sample_size = 1
+
+        # ---------------- switch trans ---------
+        self.trans_weight = args.trans_weight
 
         # ---------------- OOV regular ------------------
         self.gama = args.gama       # oov regular weights
@@ -174,7 +174,7 @@ class BertSpanNerBN(BertPreTrainedModel):
                 trans_attention_mask,
                 trans_token_type_ids,
                 trans_valid_mask,
-                labels,
+                trans_labels,
                 trans_position_ids,
                 head_mask,
                 inputs_embeds,
@@ -188,7 +188,7 @@ class BertSpanNerBN(BertPreTrainedModel):
                 trans_real_span_mask_ltoken,
             )
 
-            loss_dict['s_z_loss'] = switch_result['loss']
+            loss_dict['s_z_loss'] = self.trans_weight * switch_result['loss']
 
             # minimize KL(p(z1|t1) || p(z2|t2))
             # entity_dist = kl_div((origin_result['mean'], origin_result['log_var']),

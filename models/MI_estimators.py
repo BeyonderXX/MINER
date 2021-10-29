@@ -136,7 +136,7 @@ class vCLUB(UpperBound):
                mi estimation [nsample, 1]
         """
         positive = torch.zeros_like(y_samples)
-        #
+
         negative = - (y_samples - y_n_samples) ** 2 / 2.
         # TODO mean 分母为 seq_len*batch, 最后数值过小
         upper_bound = (positive.sum(dim=-1) - negative.sum(dim=-1)).mean()
@@ -199,7 +199,7 @@ class InfoNCE(nn.Module):
         lower_bound = T0 - T1.logsumexp(dim=1)  # torch.log(T1.exp().mean(dim = 1)).mean()
 
         # compute the negative loss (maximise loss == minimise -loss)
-        return lower_bound.sum()
+        return lower_bound.mean()
 
     def span_mi_loss(self, x_spans, x_span_idxes, y_spans, y_span_idxes):
         """
@@ -254,7 +254,7 @@ def kl_div(param1, param2):
             + torch.bmm(temp, mean_diff.view(bsz, -1, 1)).view(bsz)
     )
 
-    return KL.sum()
+    return KL.mean()
 
 
 def kl_norm(mu, log_var):

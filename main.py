@@ -59,12 +59,6 @@ def get_args():
              "checkpoints will be written.",
     )
 
-    parser.add_argument(
-        "--mode", default='bn', type=str,
-        help="bn for information bottleneck, oov for out of distribution, "
-             "cc for cross category."
-    )
-
     # Other parameters
     parser.add_argument("--gpu_id", default=6, type=int,
                         help="GPU number id")
@@ -77,6 +71,11 @@ def get_args():
     parser.add_argument(
         "--hidden_dim", default=50, type=int,
         help="bottleneck encoder out dim"
+    )
+
+    parser.add_argument(
+        "--trans_weight", default=1.0, type=float,
+        help="weight of trans sample loss"
     )
 
     parser.add_argument(
@@ -103,11 +102,6 @@ def get_args():
     parser.add_argument(
         "--gama", default=1e-3, type=float,
         help="weights of oov regular"
-    )
-
-    parser.add_argument(
-        "--theta", default=1e-3, type=float,
-        help="weights of cross category regular"
     )
 
     parser.add_argument(
@@ -155,7 +149,6 @@ def train(args, model, tokenizer, labels, pad_token_label_id):
     """ Train the model """
     train_examples = load_and_cache_examples(args, mode="train")
     training_steps = (len(train_examples) - 1 / args.epoch + 1) * args.epoch
-
     # Prepare optimizer and schedule (linear warmup and decay)
     optimizer, scheduler = prepare_optimizer_scheduler(args, model, training_steps)
 
@@ -392,7 +385,7 @@ def robust_evaluate(args, ckpt_dir, tokenizer_args, labels, pad_token_label_id,
             out_trans_predictions = os.path.join(
                 ckpt_dir, "{0}_{1}_predictions.txt".format(prefix, trans)
             )
-            predictions_save(test_file, predictions, out_trans_predictions)
+            predictions_save(test_file, predictions, out_trans_predictions, args)
 
             logger.info(
                 "Finish evaluate Robustness of {0} {1} transformation".format(prefix, trans)
@@ -509,7 +502,7 @@ def main():
         # Save predictions
         test_file = os.path.join(args.data_dir, "test.txt")
         output_test_predictions = os.path.join(best_ckpt_dir, "test_predictions.txt")
-        predictions_save(test_file, predictions, output_test_predictions)
+        predictions_save(test_file, predictions, output_test_predictions, args)
 
     if args.do_robustness_eval:
         # eval best checkpoint

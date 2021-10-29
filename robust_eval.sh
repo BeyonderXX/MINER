@@ -70,3 +70,12 @@ nohup python main.py --gpu_id 6 --output_dir /root/RobustNER/out/inter_new_sampl
 
 # 新实现 + best params
 nohup python main.py --gpu_id 0 --output_dir /root/RobustNER/out/best_params_test/ --gama 1 --r 1e-3 --epoch 50 --rep_mode typos --batch_size 32 --do_train --do_eval --do_predict --do_robustness_eval > best_params_test.log 2>&1 &
+# lr 测试 5e-4
+nohup python main.py --gpu_id 1 --output_dir /root/RobustNER/out/best_params_5e4/ --gama 1 --bert_lr 5e-4 --lr 5e-4 --r 1e-3 --epoch 50 --rep_mode typos --batch_size 32 --do_train --do_eval --do_predict --do_robustness_eval > best_params_5e4.log 2>&1 &
+# lr 测试 1e-4
+nohup python main.py --gpu_id 2 --output_dir /root/RobustNER/out/best_params_1e4/ --gama 1 --bert_lr 1e-4 --lr 1e-4 --r 1e-3 --epoch 50 --rep_mode typos --batch_size 32 --do_train --do_eval --do_predict --do_robustness_eval > best_params_1e4.log 2>&1 &
+# lr 测试 1e-5
+nohup python main.py --gpu_id 3 --output_dir /root/RobustNER/out/best_params_1e5/ --gama 1 --bert_lr 1e-5 --lr 1e-5 --r 1e-3 --epoch 50 --rep_mode typos --batch_size 32 --do_train --do_eval --do_predict --do_robustness_eval > best_params_1e5.log 2>&1 &
+
+
+# mi loss 改为 mean, r 系数待修改
