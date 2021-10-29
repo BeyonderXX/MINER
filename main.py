@@ -46,7 +46,7 @@ def get_args():
     parser.add_argument(
         "--data_dir",
         default="/root/RobustNER/data/conll2003/origin/",
-        #default="/root/RobustNER/data/debug/",
+        # default="/root/RobustNER/data/debug/",
         type=str,
         help="The input data dir. Should contain the training files for the "
              "CoNLL-2003 NER task.",
@@ -219,6 +219,7 @@ def train(args, model, tokenizer, labels, pad_token_label_id):
                       "trans_attention_mask": batch[13],
                       "trans_valid_mask": batch[14],
                       "trans_token_type_ids": batch[15],
+                      "trans_labels": batch[16],
 
                       "trans_span_idxs_ltoken": batch[17],
                       "trans_morph_idxs": batch[18],
@@ -241,7 +242,6 @@ def train(args, model, tokenizer, labels, pad_token_label_id):
 
             # clip gradients
             torch.nn.utils.clip_grad_norm_(model.parameters(), args.max_grad_norm)
-
             optimizer.step()
             scheduler.step()  # Update learning rate schedule
             model.zero_grad()

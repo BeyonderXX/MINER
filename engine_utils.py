@@ -77,7 +77,6 @@ def arg_parse():
              "Sequences longer than this will be truncated, "
              "sequences shorter will be padded.",
     )
-
     parser.add_argument("--loss_type", default="lsr", type=str,
                         help="The loss function to optimize.")
     parser.add_argument("--learning_rate", default=5e-5, type=float,
@@ -158,7 +157,7 @@ def prepare_optimizer_scheduler(args, model, training_steps):
                         + list(model.span_classifier.named_parameters())\
                         + list(model.spanLen_embedding.named_parameters())\
                         + list(model.morph_embedding.named_parameters())
-                        # + list(model.z_reg.named_parameters()) \
+                    #   + list(model.z_reg.named_parameters())
 
     args.bert_lr = args.bert_lr if args.bert_lr else args.learning_rate
     args.classifier_lr = args.classifier_lr if args.classifier_lr else args.learning_rate

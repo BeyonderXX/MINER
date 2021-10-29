@@ -85,11 +85,6 @@ class BertSpanNerBN(BertPreTrainedModel):
         # TODO 加入 sample 机制
         self.sample_size = 1
 
-        # self.z_classifier = nn.Linear(args.hidden_dim, config.num_labels)
-
-        # predict p(y|v)
-        # self.alpha = args.alpha     # kl_v_z params
-
         # ---------------- OOV regular ------------------
         self.gama = args.gama       # oov regular weights
         self.oov_reg = vCLUB()
@@ -123,8 +118,11 @@ class BertSpanNerBN(BertPreTrainedModel):
 
         trans_input_ids=None,
         trans_attention_mask=None,
-        trans_valid_mask=None,
         trans_token_type_ids=None,
+        trans_valid_mask=None,
+        trans_labels=None,
+        trans_position_ids=None,
+
         # separate = None,
         trans_span_idxs_ltoken=None,
         trans_morph_idxs=None,
@@ -136,6 +134,102 @@ class BertSpanNerBN(BertPreTrainedModel):
         """
         默认有 labels 为 train, 无 labels 为 test
         """
+        origin_result = self.normal_forward(
+            input_ids,
+            attention_mask,
+            token_type_ids,
+            valid_mask,
+            labels,
+            position_ids,
+            head_mask,
+            inputs_embeds,
+            decode,
+            # separate
+            span_idxs_ltoken,
+            morph_idxs,
+            span_label_ltoken,
+            span_lens,
+            span_weights,
+            real_span_mask_ltoken,
+        )
+
+        outputs = []
+        loss_dict = {}
+
+        if decode:
+            predicts = self.softmax(origin_result['logits'])
+            outputs = [predicts]
+
+        if labels is not None:
+            loss_dict['z_loss'] = origin_result['loss']
+
+            # reg p(z|x) to N(0,1)
+            if self.beta > 0:
+                kl_encoder = kl_norm(origin_result['mean'], origin_result['log_var'])
+                loss_dict['norm'] = self.get_beta() * kl_encoder
+
+            # add switch features
+            switch_result = self.normal_forward(
+                trans_input_ids,
+                trans_attention_mask,
+                trans_token_type_ids,
+                trans_valid_mask,
+                labels,
+                trans_position_ids,
+                head_mask,
+                inputs_embeds,
+                decode,
+                # separate
+                trans_span_idxs_ltoken,
+                trans_morph_idxs,
+                trans_span_label_ltoken,
+                trans_span_lens,
+                trans_span_weights,
+                trans_real_span_mask_ltoken,
+            )
+
+            loss_dict['s_z_loss'] = switch_result['loss']
+
+            # minimize KL(p(z1|t1) || p(z2|t2))
+            # entity_dist = kl_div((origin_result['mean'], origin_result['log_var']),
+            #                      (switch_result['mean'], switch_result['log_var']))
+            entity_dist = self.oov_reg.update(
+                origin_result['mean'], switch_result['mean']
+            )
+            loss_dict['oov'] = self.gama * entity_dist
+
+            # maximize I(z1, z2)
+            x_span_idxes, y_span_idxes = get_random_span(origin_result['mean'], span_weights,
+                                                         switch_result['mean'], trans_span_weights)
+            # mean -> z
+            entity_mi = self.r * self.z_reg.span_mi_loss(origin_result['z'], x_span_idxes,
+                                                         switch_result['z'], y_span_idxes)
+            loss_dict['mi'] = entity_mi
+
+            loss_dict['loss'] = sum([item[1] for item in loss_dict.items()])
+            outputs = [loss_dict] + outputs
+
+        return outputs  # (loss), scores
+
+    def normal_forward(
+            self,
+            input_ids,
+            attention_mask=None,
+            token_type_ids=None,
+            valid_mask=None,
+            labels=None,
+            position_ids=None,
+            head_mask=None,
+            inputs_embeds=None,
+            decode=False,
+            # separate
+            span_idxs_ltoken=None,
+            morph_idxs=None,
+            span_label_ltoken=None,
+            span_lens=None,
+            span_weights=None,
+            real_span_mask_ltoken=None,
+    ):
         origin_rep = self.encoding(
             input_ids,
             attention_mask,
@@ -149,85 +243,43 @@ class BertSpanNerBN(BertPreTrainedModel):
             morph_idxs
         )
         mean, log_var = self.bn_encoder.get_mu_logvar(origin_rep)
-        bsz, seqlen, _ = mean.shape
+        bsz, seqlen, rep_dim = mean.shape
 
-        if labels is not None:  # training
-            # (bsz * sample_size, seq_len, tag_dim)
-            z = mean
-            # TODO, add span_label_ltoken
-            ex_span_label_ltoken = span_label_ltoken.unsqueeze(1) \
-                .repeat(1, self.sample_size, 1) \
-                .view(bsz * self.sample_size, seqlen)
-            ex_real_span_mask_ltoken = real_span_mask_ltoken.unsqueeze(1) \
-                .repeat(1, self.sample_size, 1) \
-                .view(bsz * self.sample_size, seqlen)
-            ex_span_weights = span_weights.unsqueeze(1) \
-                .repeat(1, self.sample_size, 1) \
-                .view(bsz * self.sample_size, seqlen)
-            
-        else:  # testing
-            z = mean
+        # add sample mechanism
+        # (bsz, sample_size, seq_len, tag_dim)
+        # z = self.bn_encoder.get_sample_from_param_batch(
+        #     mean, log_var, self.sample_size
+        # )
 
-        # (batch, n_span, n_class)
-        logits = self.span_classifier(z)
-        outputs = []
-        loss_dict = {}
+        z = mean.unsqueeze(1)
+        ex_span_label_ltoken = span_label_ltoken.unsqueeze(1) \
+            .repeat(1, self.sample_size, 1) \
+            .view(bsz * self.sample_size, seqlen)
+        ex_real_span_mask_ltoken = real_span_mask_ltoken.unsqueeze(1) \
+            .repeat(1, self.sample_size, 1) \
+            .view(bsz * self.sample_size, seqlen)
+        ex_span_weights = span_weights.unsqueeze(1) \
+            .repeat(1, self.sample_size, 1) \
+            .view(bsz * self.sample_size, seqlen)
 
-        if decode:
-            predicts = self.softmax(logits)
-            outputs = [predicts]
+        logits = self.span_classifier(z.reshape(-1, seqlen, rep_dim))
+        outputs = {
+            "mean": mean,
+            "log_var": log_var,
+            "z": z,
+            "logits":logits
+        }
 
         if labels is not None:
-            loss = self.compute_loss(
-                logits, ex_span_label_ltoken, ex_real_span_mask_ltoken, 
+            outputs['loss'] = self.compute_classifier_loss(
+                logits, ex_span_label_ltoken, ex_real_span_mask_ltoken,
                 ex_span_weights, mode='train'
             )
-            loss_dict['z_loss'] = loss
 
-            # reg p(z|x) to N(0,1)
-            if self.beta > 0:
-                kl_encoder = kl_norm(mean, log_var)
-                loss_dict['norm'] = self.get_beta() * kl_encoder
+        return outputs   # (rep, logits, loss)
 
-            # add switch features
-            switch_rep = self.encoding(
-                trans_input_ids,
-                trans_attention_mask,
-                trans_token_type_ids,
-                position_ids,
-                head_mask,
-                inputs_embeds,
-                trans_valid_mask,
-                trans_span_idxs_ltoken,
-                trans_span_lens,
-                trans_morph_idxs
-            )
-            switch_mean, switch_log_var = self.bn_encoder.get_mu_logvar(switch_rep)
-            switch_logits = self.span_classifier(switch_mean)
 
-            switch_loss = self.compute_loss(
-                switch_logits, trans_span_label_ltoken,
-                trans_real_span_mask_ltoken, trans_span_weights, mode='train'
-            )
-            loss_dict['s_z_loss'] = switch_loss
-
-            # minimize KL(p(z1|t1) || p(z2|t2))
-            entity_dist = self.oov_reg.update(
-                mean, switch_mean
-            )
-            loss_dict['oov'] = self.gama * entity_dist
-
-            # maximize I(z1, z2)
-            x_span_idxes, y_span_idxes = get_random_span(mean, span_weights, switch_mean, trans_span_weights)
-            entity_mi = self.r * self.z_reg.span_mi_loss(mean, x_span_idxes, switch_mean, y_span_idxes)
-            loss_dict['mi'] = entity_mi
-
-            loss_dict['loss'] = sum([item[1] for item in loss_dict.items()])
-            outputs = [loss_dict] + outputs
-
-        return outputs  # (loss), scores
-
-    def compute_loss(self, all_span_rep, span_label_ltoken, real_span_mask_ltoken, span_weights, mode):
+    def compute_classifier_loss(self, all_span_rep, span_label_ltoken, real_span_mask_ltoken, span_weights, mode):
         """
 
         :param all_span_rep: shape: (bs, n_span, n_class)
@@ -260,7 +312,7 @@ class BertSpanNerBN(BertPreTrainedModel):
         position_ids,
         head_mask,
         inputs_embeds,
-        valid_mask, 
+        valid_mask,
         span_idxs_ltoken,
         span_lens,
         morph_idxs
@@ -291,17 +343,6 @@ class BertSpanNerBN(BertPreTrainedModel):
         all_span_rep = torch.cat((all_span_rep, spanlen_rep, span_morph_rep), dim=-1)
 
         return all_span_rep
-
-    def post_encoding(self, origin_out):
-        # p(t|x) 假设符合高斯分布
-        means, log_vars = [], []
-        for i in range(len(origin_out)):
-            post_encoder = getattr(self, 'poster_encoder_{}'.format(i))
-            l_mean, l_log_var = post_encoder.get_mu_logvar(origin_out[i])
-            means.append(l_mean)
-            log_vars.append(l_log_var)
-
-        return means, log_vars
 
     def get_beta(self, step=0):
 
