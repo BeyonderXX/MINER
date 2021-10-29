@@ -157,8 +157,8 @@ def prepare_optimizer_scheduler(args, model, training_steps):
                         + list(model.span_extractor.named_parameters())\
                         + list(model.span_classifier.named_parameters())\
                         + list(model.spanLen_embedding.named_parameters())\
-                        + list(model.morph_embedding.named_parameters())
-                        # + list(model.z_reg.named_parameters()) \
+                        + list(model.morph_embedding.named_parameters())\
+                        + list(model.z_reg.named_parameters())
 
     args.bert_lr = args.bert_lr if args.bert_lr else args.learning_rate
     args.classifier_lr = args.classifier_lr if args.classifier_lr else args.learning_rate
