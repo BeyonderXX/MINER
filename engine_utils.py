@@ -155,7 +155,7 @@ def prepare_optimizer_scheduler(args, model, training_steps):
                         + list(model.span_classifier.named_parameters())\
                         + list(model.spanLen_embedding.named_parameters())\
                         + list(model.morph_embedding.named_parameters())
-                    #   + list(model.z_reg.named_parameters())
+                      # + list(model.z_reg.named_parameters())
 
     args.bert_lr = args.bert_lr if args.bert_lr else DEFAULT_LR
     args.lr = args.lr if args.lr else DEFAULT_LR

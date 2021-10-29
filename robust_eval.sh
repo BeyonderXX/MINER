@@ -68,14 +68,28 @@ nohup python main.py --gpu_id 5 --output_dir /root/RobustNER/out/inter_new/ --ga
 nohup python main.py --gpu_id 6 --output_dir /root/RobustNER/out/inter_new_sample1/ --gama 1e-3 --r 1e-2 --epoch 30 --rep_mode typos --batch_size 32 --do_train --do_eval --do_predict --do_robustness_eval > inter_new_sample1.log 2>&1 &
 
 
-# 新实现 + best params
+# 新实现 + lr 5e-5
+# origin 88.98  CrossCategory 59.19   Typos 86.48   OOV 75.78
 nohup python main.py --gpu_id 0 --output_dir /root/RobustNER/out/best_params_test/ --gama 1 --r 1e-3 --epoch 50 --rep_mode typos --batch_size 32 --do_train --do_eval --do_predict --do_robustness_eval > best_params_test.log 2>&1 &
+
 # lr 测试 5e-4
+# origin 30.77  CrossCategory 12.17   Typos 33.16   OOV 22.63
 nohup python main.py --gpu_id 1 --output_dir /root/RobustNER/out/best_params_5e4/ --gama 1 --bert_lr 5e-4 --lr 5e-4 --r 1e-3 --epoch 50 --rep_mode typos --batch_size 32 --do_train --do_eval --do_predict --do_robustness_eval > best_params_5e4.log 2>&1 &
+
 # lr 测试 1e-4
+# origin 87.91  CrossCategory 56.41   Typos 83.87   OOV 71.71
 nohup python main.py --gpu_id 2 --output_dir /root/RobustNER/out/best_params_1e4/ --gama 1 --bert_lr 1e-4 --lr 1e-4 --r 1e-3 --epoch 50 --rep_mode typos --batch_size 32 --do_train --do_eval --do_predict --do_robustness_eval > best_params_1e4.log 2>&1 &
+
 # lr 测试 1e-5
+# origin 89.80  CrossCategory 61.39   Typos 87.34   OOV 77.29
 nohup python main.py --gpu_id 3 --output_dir /root/RobustNER/out/best_params_1e5/ --gama 1 --bert_lr 1e-5 --lr 1e-5 --r 1e-3 --epoch 50 --rep_mode typos --batch_size 32 --do_train --do_eval --do_predict --do_robustness_eval > best_params_1e5.log 2>&1 &
 
+# bert 1e-5, lr 5e-5
+# origin 90.41  CrossCategory 60.99   Typos 87.33   OOV 77.77
+nohup python main.py --gpu_id 4 --output_dir /root/RobustNER/out/best_params_b1e5_l5e5/ --gama 1 --bert_lr 1e-5 --lr 5e-5 --r 5e-2 --epoch 50 --rep_mode typos --batch_size 32 --do_train --do_eval --do_predict --do_robustness_eval > best_params_b1e5_l5e5.log 2>&1 &
 
-# mi loss 改为 mean, r 系数待修改
+# 解除 w 注释
+# origin 88.63  CrossCategory 59.93   Typos 87.12   OOV 75.25
+nohup python main.py --gpu_id 5 --output_dir /root/RobustNER/out/best_params_infoNCE/ --gama 1 --bert_lr 5e-5 --lr 5e-5 --r 5e-3 --epoch 50 --rep_mode typos --batch_size 32 --do_train --do_eval --do_predict --do_robustness_eval > best_params_infoNCE.log 2>&1 &
+
+
