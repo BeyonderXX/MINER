@@ -189,8 +189,8 @@ def count_len_subword(pmi_json):
 
 if __name__ == '__main__':
     from prettyprinter import cpprint
-    training_file = '../data/conll2003/origin/train.txt'
-    entity_out = 'test.txt'
+    training_file = '../data/OpenNER/origin/train.txt'
+    entity_out = 'entity_test.txt'
     entity_json = get_entity(training_file, entity_out)
     # # eo = open(entity_out, 'r+', encoding='utf-8')
     # # entity_json = json.load(eo)

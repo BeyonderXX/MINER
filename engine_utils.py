@@ -53,13 +53,7 @@ def arg_parse():
         type=str,
         help="Path to pre-trained model or shortcut name",
     )
-    parser.add_argument(
-        "--labels",
-        default="/root/RobustNER/data/conll2003/labels.txt",
-        type=str,
-        help="Path to a file containing all labels. "
-             "If not specified, CoNLL-2003 labels are used.",
-    )
+
     parser.add_argument(
         "--config_name", default="", type=str,
         help="Pretrained config name or path if not the same as model_name"
@@ -217,10 +211,22 @@ def get_ds_features(args, examples, tokenizer, labels, pad_token_label_id):
     neg_features = dataset_2_features(args, neg_examples, tokenizer, labels,
                                       pad_token_label_id, log_prefix='negative')
 
+    # check_samples(features, neg_features)
+
     return TensorDataset(
         *features,
         *neg_features
     )
+
+
+# TODO
+def check_samples(features, neg_features):
+    idx = 0
+    assert len(features[0]) == len(neg_features[0])
+
+    for idx in range(len(features)):
+        if len(features[idx]) != len(neg_features[idx]):
+            print('Debug')
 
 
 # 获取 mask 机制模型数据集特征

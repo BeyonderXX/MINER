@@ -189,6 +189,10 @@ class BertSpanNerBN(BertPreTrainedModel):
             )
 
             loss_dict['s_z_loss'] = self.trans_weight * switch_result['loss']
+            # #DSH:
+            # print('\morigin_result mean is:')
+            # print(origin_result['mean'])
+            # print(origin_result['mean'])
 
             # minimize KL(p(z1|t1) || p(z2|t2))
             # entity_dist = kl_div((origin_result['mean'], origin_result['log_var']),

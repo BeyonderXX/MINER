@@ -45,8 +45,8 @@ def get_args():
     # Required parameters
     parser.add_argument(
         "--data_dir",
-        default="/root/RobustNER/data/conll2003/origin/",
-        # default="/root/RobustNER/data/debug/",
+        default="/root/RobustNER/data/OpenNER/origin/",
+        # default="/root/RobustNER/data/OpenNER/debug/",
         type=str,
         help="The input data dir. Should contain the training files for the "
              "CoNLL-2003 NER task.",
@@ -54,7 +54,7 @@ def get_args():
 
     parser.add_argument(
         "--labels",
-        default="/root/RobustNER/data/conll2003/labels.txt",
+        default="/root/RobustNER/data/OpenNER/labels.txt",
         type=str,
         help="Path to a file containing all labels. "
              "If not specified, CoNLL-2003 labels are used.",
@@ -62,7 +62,7 @@ def get_args():
 
     parser.add_argument(
         "--output_dir",
-        default="/root/RobustNER/out/bert_uncase/debug/",
+        default="/root/RobustNER/out/OpenNER/bert_uncase/debug/",
         type=str,
         help="The output directory where the model predictions and "
              "checkpoints will be written.",
@@ -125,7 +125,7 @@ def get_args():
     )
 
     parser.add_argument(
-        "--pmi_json", default='/root/RobustNER/data/conll2003/pmi.json'
+        "--pmi_json", default='/root/RobustNER/data/OpenNER/pmi.json'
     )
     parser.add_argument(
         "--pmi_preserve", default=0.3, type=float,
@@ -182,7 +182,8 @@ def train(args, model, tokenizer, labels, pad_token_label_id):
         train_dataset = get_ds_features(args, train_examples, tokenizer,
                                         labels, pad_token_label_id)
 
-        train_sampler = RandomSampler(train_dataset)
+        # train_sampler = RandomSampler(train_dataset)
+        train_sampler = SequentialSampler(train_dataset)
         train_dataloader = DataLoader(train_dataset,
                                       sampler=train_sampler,
                                       batch_size=args.batch_size,
@@ -258,17 +259,17 @@ def train(args, model, tokenizer, labels, pad_token_label_id):
                     )
                     weighted_score = results['span_f1']
 
-                    # TODO, add dev mode
-                    if args.do_robustness_eval and epoch_num > 5:
-                        robust_f1 = robust_evaluate(
-                            args, args.output_dir, None, labels,
-                            pad_token_label_id, prefix="{}".format(global_step),
-                            model=model, tokenizer=tokenizer
-                        )
-                        # select best ckpt base weighted f1 score
-                        weighted_score = 0.35 * results['span_f1'] + 0.65 * robust_f1
-                    else:
-                        weighted_score *= weighted_score
+                    # # TODO, add dev mode
+                    # if args.do_robustness_eval and epoch_num > 5:
+                    #     robust_f1 = robust_evaluate(
+                    #         args, args.output_dir, None, labels,
+                    #         pad_token_label_id, prefix="{}".format(global_step),
+                    #         model=model, tokenizer=tokenizer
+                    #     )
+                    #     # select best ckpt base weighted f1 score
+                    #     weighted_score = 0.35 * results['span_f1'] + 0.65 * robust_f1
+                    # else:
+                    #     weighted_score *= weighted_score
 
                     if best_score < weighted_score:
                         best_score = weighted_score
@@ -512,11 +513,6 @@ def main():
         test_file = os.path.join(args.data_dir, "test.txt")
         output_test_predictions = os.path.join(best_ckpt_dir, "test_predictions.txt")
         predictions_save(test_file, predictions, output_test_predictions, args)
-
-    if args.do_robustness_eval:
-        # eval best checkpoint
-        robust_evaluate(args, best_ckpt_dir, tokenizer_args, labels,
-                        pad_token_label_id, prefix="best ckpt")
 
 
 if __name__ == "__main__":

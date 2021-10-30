@@ -194,7 +194,10 @@ class InfoNCE(nn.Module):
         y_tile = y_samples.unsqueeze(1).repeat((1, sample_size, 1))
 
         T0 = self.F_func(torch.cat([x_samples, y_samples], dim=-1))
-        T1 = self.F_func(torch.cat([x_tile, y_tile], dim=-1))  # [s_size, s_size, 1]
+        try:
+            T1 = self.F_func(torch.cat([x_tile, y_tile], dim=-1))  # [s_size, s_size, 1]
+        except Exception:
+            print('Debug')
 
         lower_bound = T0 - T1.logsumexp(dim=1)  # torch.log(T1.exp().mean(dim = 1)).mean()
 
@@ -214,8 +217,11 @@ class InfoNCE(nn.Module):
         x_span_idxes = x_span_idxes.unsqueeze(1).unsqueeze(1).repeat(1, 1, dim)
         y_span_idxes = y_span_idxes.unsqueeze(1).unsqueeze(1).repeat(1, 1, dim)
 
-        x_spans_con = x_spans[:, 0, :, :].squeeze().gather(1, x_span_idxes).squeeze()
-        y_spans_con = y_spans[:, 0, :, :].squeeze().gather(1, y_span_idxes).squeeze()
+        try:
+            x_spans_con = x_spans[:, 0, :, :].squeeze(axis=1).gather(1, x_span_idxes).squeeze(1)
+            y_spans_con = y_spans[:, 0, :, :].squeeze(axis=1).gather(1, y_span_idxes).squeeze(1)
+        except Exception:
+            print('Error!')
 
         info_nce_loss = self.forward(x_spans_con, y_spans_con)
 

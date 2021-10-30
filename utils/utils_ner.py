@@ -618,6 +618,12 @@ def collate_fn(batch):
     neg_max_len = neg_batch_lens.max().item()
     neg_sub_max_len = neg_sub_batch_lens.max().item()
     neg_max_span_len = min(502, 4 * neg_max_len - 6)
+    
+    if max_span_len != neg_max_span_len:
+        # TODO
+        # print('not equal : {}-{}'.format(max_span_len, neg_max_span_len))
+        max_span_len = min(max_span_len, neg_max_span_len)
+        neg_max_span_len = max_span_len
 
     results = ()
 

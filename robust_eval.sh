@@ -93,3 +93,18 @@ nohup python main.py --gpu_id 4 --output_dir /root/RobustNER/out/best_params_b1e
 nohup python main.py --gpu_id 5 --output_dir /root/RobustNER/out/best_params_infoNCE/ --gama 1 --bert_lr 5e-5 --lr 5e-5 --r 5e-3 --epoch 50 --rep_mode typos --batch_size 32 --do_train --do_eval --do_predict --do_robustness_eval > best_params_infoNCE.log 2>&1 &
 
 
+
+# ***************************** CONLL2003 消融实验 ***********************************
+# bsl + MI
+nohup python main.py --gpu_id 0 --output_dir /root/RobustNER/out/ablation_mi/ --trans_weight 0 --gama 0 --r 5e-2 --bert_lr 1e-5 --lr 5e-5  --epoch 50 --rep_mode typos --batch_size 32 --do_train --do_eval --do_predict --do_robustness_eval > ablation_mi.log 2>&1 &
+nohup python main.py --gpu_id 1 --output_dir /root/RobustNER/out/ablation_mi_trans/ --trans_weight 1 --gama 0 --r 5e-2 --bert_lr 1e-5 --lr 5e-5  --epoch 50 --rep_mode typos --batch_size 32 --do_train --do_eval --do_predict --do_robustness_eval > ablation_mi_trans.log 2>&1 &
+
+
+# bsl + OOV
+nohup python main.py --gpu_id 2 --output_dir /root/RobustNER/out/ablation_oov/ --trans_weight 0 --gama 1 --r 0 --bert_lr 1e-5 --lr 5e-5  --epoch 50 --rep_mode typos --batch_size 32 --do_train --do_eval --do_predict --do_robustness_eval > ablation_oov.log 2>&1 &
+nohup python main.py --gpu_id 3 --output_dir /root/RobustNER/out/ablation_oov_trans/ --trans_weight 1 --gama 1 --r 0 --bert_lr 1e-5 --lr 5e-5  --epoch 50 --rep_mode typos --batch_size 32 --do_train --do_eval --do_predict --do_robustness_eval > ablation_oov_trans.log 2>&1 &
+
+
+# ***************************** OpenNER 实验 ***********************************
+nohup python main_openNER.py --gpu_id 4 --output_dir /root/RobustNER/out/OpenNER/best_params_test/ --bert_lr 1e-5 --lr 5e-5 --gama 1 --r 1e-3 --epoch 50 --rep_mode typos --batch_size 32 --do_train --do_eval --do_predict > openNER_best_params_test.log 2>&1 &
+
