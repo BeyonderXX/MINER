@@ -7,8 +7,8 @@ import logging
 import argparse
 
 from torch.utils.data import TensorDataset
-from utils.utils_ner import convert_examples_to_features, read_examples_from_file, \
-    build_typos_neg_examples, build_ent_mask_examples, get_labels
+from utils.utils_ner import convert_examples_to_features, read_examples_from_file, get_labels
+from utils.utils_contrastive import build_typos_neg_examples, build_ent_mask_examples
 
 from transformers import (
     AdamW,
@@ -207,7 +207,9 @@ def get_ds_features(args, examples, tokenizer, labels, pad_token_label_id):
     # print('def get_ds_features()-end')
 
     neg_examples = build_typos_neg_examples(examples, tokenizer,
-                                            pmi_json=args.pmi_json)
+                                            pmi_json=args.pmi_json,
+                                            entity_json=args.entity_json,
+                                            switch_ratio=args.switch_ratio)
     neg_features = dataset_2_features(args, neg_examples, tokenizer, labels,
                                       pad_token_label_id, log_prefix='negative')
 
@@ -301,8 +303,15 @@ def dataset_2_features(args, examples, tokenizer, labels, pad_token_label_id, lo
     # TODO, valid mask + idxs_ltoken 生成
     all_span_idxs = torch.LongTensor([f.all_span_idxs for f in features])
 
-    # 0all_input_ids, 1all_input_mask, 2all_valid_mask, 3all_segment_ids, 4all_label_ids, 5all_span_idxs_ltoken, 6morph_idxs, 7span_label_ltoken, 8all_span_lens, 9all_span_weights, 10real_span_mask_ltoken, 11all_span_idxs
-    return all_input_ids, all_input_mask, all_valid_mask, all_segment_ids, all_label_ids, all_span_idxs_ltoken, morph_idxs, span_label_ltoken, all_span_lens, all_span_weights, real_span_mask_ltoken, all_span_idxs
+    # added by wangxiao
+    all_switch_idxs = torch.LongTensor([f.switch_idx for f in features])
+
+    # 0all_input_ids, 1all_input_mask, 2all_valid_mask, 3all_segment_ids, 4all_label_ids, 5all_span_idxs_ltoken,
+    # 6morph_idxs, 7span_label_ltoken, 8all_span_lens, 9all_span_weights, 10real_span_mask_ltoken, 11all_span_idxs,
+    # 12switch_idxs
+    return all_input_ids, all_input_mask, all_valid_mask, all_segment_ids, all_label_ids, all_span_idxs_ltoken,\
+           morph_idxs, span_label_ltoken, all_span_lens, all_span_weights, real_span_mask_ltoken, all_span_idxs, \
+           all_switch_idxs
 
 
 def resuming_training(args, train_dataloader):
@@ -367,8 +376,9 @@ def predictions_save(origin_file, predictions, output_file, args):
                         lines.append(words)
                         words = []
                 else:
-                    splits = line.split(" ")
+                    splits = line.split()
                     if len(splits) not in [2, 4]:
+                        print('line segs num {}'.format(len(splits)))
                         print(line)
                     
                     words.append(splits[0])

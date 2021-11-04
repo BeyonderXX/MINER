@@ -95,16 +95,60 @@ nohup python main.py --gpu_id 5 --output_dir /root/RobustNER/out/best_params_inf
 
 
 # ***************************** CONLL2003 消融实验 ***********************************
+# bsl
+nohup python main.py --gpu_id 4 --output_dir /root/RobustNER/out/ablation_bsl/ --trans_weight 0 --gama 0 --r 0 --bert_lr 1e-5 --lr 5e-5  --epoch 50 --rep_mode typos --batch_size 32 --do_train --do_eval --do_predict --do_robustness_eval > ablation_bsl.log 2>&1 &
+
 # bsl + MI
 nohup python main.py --gpu_id 0 --output_dir /root/RobustNER/out/ablation_mi/ --trans_weight 0 --gama 0 --r 5e-2 --bert_lr 1e-5 --lr 5e-5  --epoch 50 --rep_mode typos --batch_size 32 --do_train --do_eval --do_predict --do_robustness_eval > ablation_mi.log 2>&1 &
 nohup python main.py --gpu_id 1 --output_dir /root/RobustNER/out/ablation_mi_trans/ --trans_weight 1 --gama 0 --r 5e-2 --bert_lr 1e-5 --lr 5e-5  --epoch 50 --rep_mode typos --batch_size 32 --do_train --do_eval --do_predict --do_robustness_eval > ablation_mi_trans.log 2>&1 &
+
+# bsl + MI best params
+# origin ?  CrossCategory 54.37   Typos 86.91   OOV 74.16
+nohup python main.py --gpu_id 0 --output_dir /root/RobustNER/out/ablation_mi_1e2/ --trans_weight 0 --gama 0 --r 1e-2 --bert_lr 1e-5 --lr 5e-5  --epoch 50 --rep_mode typos --batch_size 16 --do_train --do_eval --do_predict --do_robustness_eval > ablation_mi_1e2.log 2>&1 &
+# TODO, 加入退火算法
+nohup python main.py --gpu_id 2 --output_dir /root/RobustNER/out/ablation_mi_5e2_anneualing/ --trans_weight 0 --gama 0 --r 5e-2 --bert_lr 1e-5 --lr 5e-5  --epoch 50 --rep_mode typos --batch_size 32 --do_train --do_eval --do_predict --do_robustness_eval > ablation_mi_5e2_anneualing.log 2>&1 &
+nohup python main.py --gpu_id 7 --output_dir /root/RobustNER/out/ablation_mi_1e2_anneualing/ --trans_weight 0 --gama 0 --r 1e-2 --bert_lr 1e-5 --lr 5e-5  --epoch 50 --rep_mode typos --batch_size 32 --do_train --do_eval --do_predict --do_robustness_eval > ablation_mi_1e2_anneualing.log 2>&1 &
+
+
+# 很差
+nohup python main.py --gpu_id 1 --output_dir /root/RobustNER/out/ablation_mi_5e3/ --trans_weight 0 --gama 0 --r 5e-3 --bert_lr 1e-5 --lr 5e-5  --epoch 50 --rep_mode typos --batch_size 16 --do_train --do_eval --do_predict --do_robustness_eval > ablation_mi_5e3.log 2>&1 &
+nohup python main.py --gpu_id 2 --output_dir /root/RobustNER/out/ablation_mi_1e3/ --trans_weight 0 --gama 0 --r 1e-3 --bert_lr 1e-5 --lr 5e-5  --epoch 50 --rep_mode typos --batch_size 16 --do_train --do_eval --do_predict --do_robustness_eval > ablation_mi_1e3.log 2>&1 &
+
 
 
 # bsl + OOV
 nohup python main.py --gpu_id 2 --output_dir /root/RobustNER/out/ablation_oov/ --trans_weight 0 --gama 1 --r 0 --bert_lr 1e-5 --lr 5e-5  --epoch 50 --rep_mode typos --batch_size 32 --do_train --do_eval --do_predict --do_robustness_eval > ablation_oov.log 2>&1 &
 nohup python main.py --gpu_id 3 --output_dir /root/RobustNER/out/ablation_oov_trans/ --trans_weight 1 --gama 1 --r 0 --bert_lr 1e-5 --lr 5e-5  --epoch 50 --rep_mode typos --batch_size 32 --do_train --do_eval --do_predict --do_robustness_eval > ablation_oov_trans.log 2>&1 &
 
+# ***************************** CONLL2003 对比样例选择实验 ***********************************
+# TODO
+nohup python main.py --gpu_id 1 --output_dir /root/RobustNER/out/typos_com/ --trans_weight 0 --gama 1 --r 1e-2 --switch_ratio 0 --bert_lr 1e-5 --lr 5e-5  --epoch 50 --rep_mode typos --batch_size 16 --do_train --do_eval --do_predict --do_robustness_eval > typos_com.log 2>&1 &
+nohup python main.py --gpu_id 2 --output_dir /root/RobustNER/out/switch_com/ --trans_weight 0 --gama 1 --r 1e-2 --switch_ratio 1 --bert_lr 1e-5 --lr 5e-5  --epoch 50 --rep_mode typos --batch_size 32 --do_train --do_eval --do_predict --do_robustness_eval > switch_com.log 2>&1 &
+nohup python main.py --gpu_id 3 --output_dir /root/RobustNER/out/te5_se5_com/ --trans_weight 0 --gama 1 --r 1e-2 --switch_ratio 0.5 --bert_lr 1e-5 --lr 5e-5  --epoch 50 --rep_mode typos --batch_size 32 --do_train --do_eval --do_predict --do_robustness_eval > te5_se5_com.log 2>&1 &
+nohup python main.py --gpu_id 7 --output_dir /root/RobustNER/out/te7_se3_com/ --trans_weight 0 --gama 1 --r 1e-2 --switch_ratio 0.3 --bert_lr 1e-5 --lr 5e-5  --epoch 50 --rep_mode typos --batch_size 32 --do_train --do_eval --do_predict --do_robustness_eval > te7_se3_com.log 2>&1 &
+# TODO
+nohup python main.py --gpu_id 0 --output_dir /root/RobustNER/out/te3_se7_com/ --trans_weight 0 --gama 1 --r 1e-2 --switch_ratio 0.7 --bert_lr 1e-5 --lr 5e-5  --epoch 50 --rep_mode typos --batch_size 16 --do_train --do_eval --do_predict --do_robustness_eval > te3_se7_com.log 2>&1 &
+
+
 
 # ***************************** OpenNER 实验 ***********************************
-nohup python main_openNER.py --gpu_id 4 --output_dir /root/RobustNER/out/OpenNER/best_params_test/ --bert_lr 1e-5 --lr 5e-5 --gama 1 --r 1e-3 --epoch 50 --rep_mode typos --batch_size 32 --do_train --do_eval --do_predict > openNER_best_params_test.log 2>&1 &
+nohup python main_openNER.py --gpu_id 2 --output_dir /root/RobustNER/out/OpenNER/l_1e4/ --bert_lr 1e-4 --lr 1e-4 --gama 1 --r 5e-2 --epoch 50 --rep_mode typos --batch_size 32 --do_train --do_eval --do_predict > l_1e4.log 2>&1 &
+nohup python main_openNER.py --gpu_id 3 --output_dir /root/RobustNER/out/OpenNER/l_1e5/ --bert_lr 1e-5 --lr 1e-5 --gama 1 --r 5e-2 --epoch 50 --rep_mode typos --batch_size 32 --do_train --do_eval --do_predict > open_l_1e5.log 2>&1 &
+nohup python main_openNER.py --gpu_id 4 --output_dir /root/RobustNER/out/OpenNER/l_5e5_b_1e5/ --bert_lr 5e-5 --lr 1e-5 --gama 1 --r 5e-2 --epoch 50 --rep_mode typos --batch_size 32 --do_train --do_eval --do_predict > open_l_5e5_b_1e5.log 2>&1 &
+nohup python main_openNER.py --gpu_id 5 --output_dir /root/RobustNER/out/OpenNER/l_1e5_b_5e6/ --bert_lr 1e-5 --lr 5e-6 --gama 1 --r 5e-2 --epoch 50 --rep_mode typos --batch_size 32 --do_train --do_eval --do_predict > open_l_1e5_b_5e6.log 2>&1 &
+nohup python main_openNER.py --gpu_id 6 --output_dir /root/RobustNER/out/OpenNER/5_1e4/ --bert_lr 5e-4 --lr 5e-4 --gama 1 --r 5e-2 --epoch 50 --rep_mode typos --batch_size 32 --do_train --do_eval --do_predict > open_5_1e4.log 2>&1 &
+nohup python main_openNER.py --gpu_id 7 --output_dir /root/RobustNER/out/OpenNER/l_5e4_b_1e4/ --bert_lr 1e-4 --lr 5e-4 --gama 1 --r 5e-2 --epoch 50 --rep_mode typos --batch_size 32 --do_train --do_eval --do_predict > open_l_5e4_b_1e4.log 2>&1 &
 
+
+# ***************************** WNUT2017 消融实验 ***********************************
+# bsl
+nohup python main_WNUT17.py --gpu_id 7 --output_dir /root/RobustNER/out/WNUT2017/bsl/ --trans_weight 0 --gama 0 --r 0 --bert_lr 1e-5 --lr 5e-5  --epoch 50 --rep_mode typos --batch_size 32 --do_train --do_eval --do_predict > WNUT_ablation_bsl.log 2>&1 &
+# bsl + mi
+nohup python main_WNUT17.py --gpu_id 3 --output_dir /root/RobustNER/out/WNUT2017/ablation_mi/ --trans_weight 0 --gama 0 --r 5e-2 --bert_lr 1e-5 --lr 5e-5  --epoch 50 --rep_mode typos --batch_size 16 --do_train --do_eval --do_predict > WNUT_ablation_mi.log 2>&1 &
+nohup python main_WNUT17.py --gpu_id 4 --output_dir /root/RobustNER/out/WNUT2017/ablation_mi_1e2/ --trans_weight 0 --gama 0 --r 1e-2 --bert_lr 1e-5 --lr 5e-5  --epoch 50 --rep_mode typos --batch_size 32 --do_train --do_eval --do_predict > WNUT_ablation_mi_1e2.log 2>&1 &
+
+# TODO, unstable result
+# bsl + OOV
+nohup python main_WNUT17.py --gpu_id 1 --output_dir /root/RobustNER/out/WNUT2017/ablation_oov/ --trans_weight 0 --gama 1 --r 0 --bert_lr 1e-5 --lr 5e-5  --epoch 50 --rep_mode typos --batch_size 32 --do_train --do_eval --do_predict > WNUT_ablation_oov.log 2>&1 &
+# mi + oov
+nohup python main_WNUT17.py --gpu_id 2 --output_dir /root/RobustNER/out/WNUT2017/ablation_full/ --trans_weight 0 --gama 1 --r 5e-2  --bert_lr 1e-5 --lr 5e-5  --epoch 50 --rep_mode typos --batch_size 32 --do_train --do_eval --do_predict > WNUT_ablation_full.log 2>&1 &

@@ -1,18 +1,20 @@
 from torch import nn
 import torch
 from .bert_ner import BertPreTrainedModel, BertModel, CRF
-from .model_utils import get_random_span
+from .model_utils import span_select
 from .MI_estimators import CLUB, vCLUB, VIB, kl_div, kl_norm, InfoNCE
 from .span_extractors import EndpointSpanExtractor
 from .classifier import MultiNonLinearClassifier
 from torch.nn import functional as F
 
+ANNEALING_RATIO = 0.3
 
 class BertSpanNerBN(BertPreTrainedModel):
     def __init__(
         self,
         config,
-        args=None
+        args=None,
+        num_labels=None
     ):
         super(BertSpanNerBN, self).__init__(config)
 
@@ -25,7 +27,7 @@ class BertSpanNerBN(BertPreTrainedModel):
 
         self.span_combination_mode = 'x,y'
         self.max_span_width = 4
-        self.n_class = 5
+        self.n_class = 5 if not num_labels else num_labels
         # must set, when set a value to the max_span_width.
         self.tokenLen_emb_dim = 50
 
@@ -107,7 +109,7 @@ class BertSpanNerBN(BertPreTrainedModel):
         inputs_embeds=None,
         # separate
         decode=False,
-        step=0,
+        step_ratio=1,
         # separate
         span_idxs_ltoken=None,
         morph_idxs=None,
@@ -115,6 +117,7 @@ class BertSpanNerBN(BertPreTrainedModel):
         span_lens=None,
         span_weights=None,
         real_span_mask_ltoken=None,
+        switch_idxs=None,
 
         trans_input_ids=None,
         trans_attention_mask=None,
@@ -129,7 +132,8 @@ class BertSpanNerBN(BertPreTrainedModel):
         trans_span_label_ltoken=None,
         trans_span_lens=None,
         trans_span_weights=None,
-        trans_real_span_mask_ltoken=None
+        trans_real_span_mask_ltoken=None,
+        trans_switch_idxs=None
     ):
         """
         默认有 labels 为 train, 无 labels 为 test
@@ -197,17 +201,27 @@ class BertSpanNerBN(BertPreTrainedModel):
             # minimize KL(p(z1|t1) || p(z2|t2))
             # entity_dist = kl_div((origin_result['mean'], origin_result['log_var']),
             #                      (switch_result['mean'], switch_result['log_var']))
+
+            # entity_dist = self.oov_reg.update(
+            #     origin_result['mean'], switch_result['mean']
+            # )
+
+            x_span_com, y_span_com = span_select(
+                origin_result['mean'].unsqueeze(1), switch_idxs,
+                switch_result['mean'].unsqueeze(1), trans_switch_idxs
+            )
+
             entity_dist = self.oov_reg.update(
-                origin_result['mean'], switch_result['mean']
+                x_span_com, y_span_com
             )
             loss_dict['oov'] = self.gama * entity_dist
 
             # maximize I(z1, z2)
-            x_span_idxes, y_span_idxes = get_random_span(origin_result['mean'], span_weights,
-                                                         switch_result['mean'], trans_span_weights)
+            x_span_com, y_span_com = span_select(origin_result['z'], switch_idxs,
+                                                 switch_result['z'], trans_switch_idxs)
+
             # mean -> z
-            entity_mi = self.r * self.z_reg.span_mi_loss(origin_result['z'], x_span_idxes,
-                                                         switch_result['z'], y_span_idxes)
+            entity_mi = self.r * self.z_reg(x_span_com, y_span_com)
             loss_dict['mi'] = entity_mi
 
             loss_dict['loss'] = sum([item[1] for item in loss_dict.items()])
@@ -348,7 +362,7 @@ class BertSpanNerBN(BertPreTrainedModel):
 
         return all_span_rep
 
-    def get_beta(self, step=0):
+    # warmup MI loss params
+    def get_r(self, ratio=0):
 
-        # return (step % 500) / 500 * self.beta
-        return self.beta
+        return self.r * min(ratio/ANNEALING_RATIO, 1)

@@ -3,7 +3,42 @@ import numpy as np
 from seqeval.metrics import classification_report
 
 
+
 def get_entities(seq):
+    """Gets entities from sequence.
+    note: BIO
+    Args:
+        seq (list): sequence of labels.
+    Returns:
+        list: list of (chunk_type, chunk_start, chunk_end).
+    Example:
+        seq = ['B-PER', 'I-PER', 'O', 'B-LOC', 'I-PER']
+        get_entity_bio(seq)
+        #output
+        [['PER', 0,1], ['LOC', 3, 3], ['PER', 4, 4]]
+    """
+    if any(isinstance(s, list) for s in seq):
+        seq = [item for sublist in seq for item in sublist + ['O']]
+
+    prev_tag = 'O'
+    prev_type = ''
+    begin_offset = 0
+    chunks = []
+    for i, chunk in enumerate(seq + ['O']):
+        tag = chunk[0]
+        type_ = chunk.split('-')[-1]
+
+        if end_of_chunk(prev_tag, tag, prev_type, type_):
+            chunks.append((prev_type, begin_offset, i - 1))
+        if start_of_chunk(prev_tag, tag, prev_type, type_):
+            begin_offset = i
+        prev_tag = tag
+        prev_type = type_
+
+    return set(chunks)
+
+
+def get_bi_entities(seq):
     """Gets entities from sequence.
     note: BIO
     Args:

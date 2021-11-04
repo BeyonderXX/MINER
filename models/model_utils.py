@@ -26,6 +26,7 @@ def valid_sequence_output(sequence_output, valid_mask, attention_mask):
     return valid_output, valid_attention_mask
 
 
+# 随机选取 实体span
 def get_random_span(x_span, x_weights, y_span, y_weights,
                     span_weight=1.0, O_ratio=0.1):
     assert x_span.shape[:-1] == x_weights.shape
@@ -71,5 +72,24 @@ def get_random_span(x_span, x_weights, y_span, y_weights,
     return x_span_idxes, y_span_idxes
 
 
+def span_select(x_spans, x_span_idxes, y_spans, y_span_idxes):
+    """
 
+    :param x_spans: (bsz, span_num, dim)
+    :param x_span_idxes: (bsz)
+    :param y_spans: (bsz, span_num, dim)
+    :param y_span_idxes: (bsz)
+    :return:
+    """
+    bsz, sample_size, _, dim = x_spans.shape
+    x_span_idxes = x_span_idxes.unsqueeze(1).unsqueeze(1).repeat(1, 1, dim)
+    y_span_idxes = y_span_idxes.unsqueeze(1).unsqueeze(1).repeat(1, 1, dim)
+
+    try:
+        x_spans_con = x_spans[:, 0, :, :].squeeze(axis=1).gather(1, x_span_idxes).squeeze(1)
+        y_spans_con = y_spans[:, 0, :, :].squeeze(axis=1).gather(1, y_span_idxes).squeeze(1)
+
+        return x_spans_con, y_spans_con
+    except Exception:
+        print('Error!')
 

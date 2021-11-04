@@ -17,15 +17,16 @@ import sys
 
 sys.path.append('../')
 
+import os
 import fitlog
 from torch.nn import CrossEntropyLoss
 from torch.utils.data import DataLoader, RandomSampler, SequentialSampler
 from tqdm import tqdm, trange
 from transformers import AutoConfig, AutoTokenizer
-from eval_metric import  span_f1_prune
+from eval_metric import span_f1, span_f1_prune, get_predict, get_predict_prune
 from models.model_ner import AutoModelForCrfNer
 
-from utils.utils_ner import collate_fn
+from utils.utils_ner import get_labels, collate_fn
 from engine_utils import *
 
 try:
@@ -44,8 +45,8 @@ def get_args():
     # Required parameters
     parser.add_argument(
         "--data_dir",
-        # default="/root/RobustNER/data/conll2003/origin/",
-        default="/root/RobustNER/data/debug/",
+        default="/root/RobustNER/data/WNUT2017/origin/",
+        # default="/root/RobustNER/data/WNUT2017/debug/",
         type=str,
         help="The input data dir. Should contain the training files for the "
              "CoNLL-2003 NER task.",
@@ -53,7 +54,7 @@ def get_args():
 
     parser.add_argument(
         "--labels",
-        default="/root/RobustNER/data/conll2003/labels.txt",
+        default="/root/RobustNER/data/WNUT2017/labels.txt",
         type=str,
         help="Path to a file containing all labels. "
              "If not specified, CoNLL-2003 labels are used.",
@@ -61,7 +62,7 @@ def get_args():
 
     parser.add_argument(
         "--output_dir",
-        default="/root/RobustNER/out/bert_uncase/debug/",
+        default="/root/RobustNER/out/WNUT2017/bert_uncase/debug/",
         type=str,
         help="The output directory where the model predictions and "
              "checkpoints will be written.",
@@ -124,20 +125,11 @@ def get_args():
     )
 
     parser.add_argument(
-        "--pmi_json", default='/root/RobustNER/data/conll2003/pmi.json'
+        "--pmi_json", default='/root/RobustNER/data/WNUT2017/pmi.json'
     )
     parser.add_argument(
         "--pmi_preserve", default=0.3, type=float,
         help="what extent of PMI ranking subword preserve."
-    )
-
-    parser.add_argument(
-        "--entity_json", default='/root/RobustNER/data/conll2003/entity.json'
-    )
-
-    parser.add_argument(
-        "--switch_ratio", default=0.5, type=float,
-        help="Entity switch ratio."
     )
 
     # training parameters
@@ -160,7 +152,6 @@ def get_args():
     )
 
     return arg_process(parser.parse_args())
-
 
 def train(args, model, tokenizer, labels, pad_token_label_id):
     """ Train the model """
@@ -190,28 +181,34 @@ def train(args, model, tokenizer, labels, pad_token_label_id):
         train_dataset = get_ds_features(args, train_examples, tokenizer,
                                         labels, pad_token_label_id)
 
-        train_sampler = RandomSampler(train_dataset)
+        # train_sampler = RandomSampler(train_dataset)
+        train_sampler = SequentialSampler(train_dataset)
         train_dataloader = DataLoader(train_dataset,
                                       sampler=train_sampler,
                                       batch_size=args.batch_size,
                                       collate_fn=collate_fn)
         logger.info("Training epoch num {0}".format(epoch_num))
         epoch_iterator = tqdm(train_dataloader, desc="Iteration")
+        # idx = 0
 
         for step, batch in enumerate(epoch_iterator):
             model.train()
             batch = tuple(t.to(args.device) for t in batch)
 
+            # idx += 1
+            # if idx < 84:
+            #     continue
+
             # typos constraint training
             # pos batch:
             # 0all_input_ids, 1all_input_mask, 2all_valid_mask, 3all_segment_ids, 4all_label_ids, 
             # 5all_span_idxs_ltoken, 6morph_idxs, 7span_label_ltoken, 8all_span_lens, 
-            # 9all_span_weights, 10real_span_mask_ltoken, 11all_span_idxs, 12switch_idx
+            # 9all_span_weights, 10real_span_mask_ltoken, 11all_span_idxs
     
             # neg batch:
-            # 13all_input_ids, 14all_input_mask, 15all_valid_mask, 16all_segment_ids, 17all_label_ids,
-            # 18all_span_idxs_ltoken, 19morph_idxs, 20span_label_ltoken, 21all_span_lens,
-            # 22all_span_weights, 23real_span_mask_ltoken, 24all_span_idxs, 25trans_switch_idx
+            # 12all_input_ids, 13all_input_mask, 14all_valid_mask, 15all_segment_ids, 16all_label_ids, 
+            # 17all_span_idxs_ltoken, 18morph_idxs, 19span_label_ltoken, 20all_span_lens, 
+            # 21all_span_weights, 22real_span_mask_ltoken, 23all_span_idxs
             inputs = {"input_ids": batch[0],
                       "attention_mask": batch[1],
                       "valid_mask": batch[2],
@@ -224,27 +221,20 @@ def train(args, model, tokenizer, labels, pad_token_label_id):
                       "span_lens": batch[8],
                       "span_weights": batch[9],
                       "real_span_mask_ltoken": batch[10],
-                      # add for compare
-                      "switch_idxs": batch[12],
 
-                      "trans_input_ids": batch[13],
-                      "trans_attention_mask": batch[14],
-                      "trans_valid_mask": batch[15],
-                      "trans_token_type_ids": batch[16],
-                      "trans_labels": batch[17],
+                      "trans_input_ids": batch[12],
+                      "trans_attention_mask": batch[13],
+                      "trans_valid_mask": batch[14],
+                      "trans_token_type_ids": batch[15],
+                      "trans_labels": batch[16],
 
-                      "trans_span_idxs_ltoken": batch[18],
-                      "trans_morph_idxs": batch[19],
-                      "trans_span_label_ltoken": batch[20],
-                      "trans_span_lens": batch[21],
-                      "trans_span_weights": batch[22],
-                      "trans_real_span_mask_ltoken": batch[23],
-
-                      "trans_switch_idxs": batch[25]
-
-                      # "step_ratio": global_step / training_steps
+                      "trans_span_idxs_ltoken": batch[17],
+                      "trans_morph_idxs": batch[18],
+                      "trans_span_label_ltoken": batch[19],
+                      "trans_span_lens": batch[20],
+                      "trans_span_weights": batch[21],
+                      "trans_real_span_mask_ltoken": batch[22],
                       }
-            # TODO, modify contrastive mechanism
 
             outputs = model(**inputs)
             loss_dic = outputs[0]
@@ -272,18 +262,6 @@ def train(args, model, tokenizer, labels, pad_token_label_id):
                         mode="dev", prefix="{}".format(global_step)
                     )
                     weighted_score = results['span_f1']
-
-                    # TODO, add dev mode
-                    if args.do_robustness_eval and epoch_num > 5:
-                        robust_f1 = robust_evaluate(
-                            args, args.output_dir, None, labels,
-                            pad_token_label_id, prefix="{}".format(global_step),
-                            model=model, tokenizer=tokenizer
-                        )
-                        # select best ckpt base weighted f1 score
-                        weighted_score = 0.35 * results['span_f1'] + 0.65 * robust_f1
-                    else:
-                        weighted_score *= weighted_score
 
                     if best_score < weighted_score:
                         best_score = weighted_score
@@ -426,7 +404,8 @@ def fast_evaluate(args, ckpt_dir, tokenizer_args, labels, pad_token_label_id,
     if not model:
         model = AutoModelForCrfNer.from_pretrained(
             ckpt_dir,
-            args=args
+            args=args,
+            num_labels=len(labels)
         )
         model.to(args.device)
 
@@ -487,7 +466,8 @@ def main():
         args.model_name_or_path,
         config=config,
         cache_dir=None,
-        args=args
+        args=args,
+        num_labels = len(labels)
     )
 
     model.to(args.device)
@@ -527,11 +507,6 @@ def main():
         test_file = os.path.join(args.data_dir, "test.txt")
         output_test_predictions = os.path.join(best_ckpt_dir, "test_predictions.txt")
         predictions_save(test_file, predictions, output_test_predictions, args)
-
-    if args.do_robustness_eval:
-        # eval best checkpoint
-        robust_evaluate(args, best_ckpt_dir, tokenizer_args, labels,
-                        pad_token_label_id, prefix="best ckpt")
 
 
 if __name__ == "__main__":

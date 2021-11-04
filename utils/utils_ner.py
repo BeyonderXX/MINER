@@ -1,14 +1,11 @@
 import logging
 import os
 import torch
-import string
 import random
-import copy
-import json
 
-from utils.typos import typos
 from utils.utils_metrics import get_entities
 from .allen_utils import enumerate_spans
+
 
 logger = logging.getLogger(__name__)
 max_spanLen = 4
@@ -17,7 +14,7 @@ max_spanLen = 4
 class InputExample(object):
     """A single training/test example for token classification."""
 
-    def __init__(self, guid, words, labels):
+    def __init__(self, guid, words, labels, switch_start=None, switch_end=None):
         """Constructs a InputExample.
 
         Args:
@@ -31,6 +28,21 @@ class InputExample(object):
         self.words = words
         self.labels = labels
 
+        # random choose entity for replace, -1 means no entity
+        if switch_start is None and switch_end is None:
+            self.random_entity()
+        else:
+            self.switch_start = switch_start
+            self.switch_end = switch_end
+
+    def random_entity(self):
+        entities = get_entities(self.labels)
+        if entities:
+            entity = random.choice(list(entities))
+            self.switch_start, self.switch_end = entity[1: ]
+        else:
+            self.switch_start = -1
+            self.switch_end = -1
 
 class InputFeatures(object):
     """A single set of features of data."""
@@ -38,7 +50,7 @@ class InputFeatures(object):
     def __init__(
             self, input_ids, input_mask, valid_mask, segment_ids, label_ids,
             all_span_idxs_ltoken, morph_idxs, span_label_ltoken, all_span_lens, all_span_weights, 
-            real_span_mask_ltoken, words, all_span_word, all_span_idxs
+            real_span_mask_ltoken, words, all_span_word, all_span_idxs, switch_idx
     ):
         self.input_ids = input_ids
         self.input_mask = input_mask
@@ -54,12 +66,14 @@ class InputFeatures(object):
         self.words = words
         self.all_span_word = all_span_word
         self.all_span_idxs = all_span_idxs
+        self.switch_idx = switch_idx
 
 
 def read_examples_from_file(data_dir, mode):
     file_path = os.path.join(data_dir, "{}.txt".format(mode))
     guid_index = 1
     examples = []
+
     with open(file_path, encoding="utf-8") as f:
         words = []
         labels = []
@@ -71,11 +85,14 @@ def read_examples_from_file(data_dir, mode):
                     words = []
                     labels = []
             else:
-                splits = line.split(" ")
+                splits = line.split()
+
                 if len(splits) not in [2, 4]:
+                    print('{}'.format(len(splits)))
                     print(line)
 
                 words.append(splits[0])
+
                 if len(splits) > 1:
                     tmp_str = splits[-1].replace("\n", "")
                     if '-' in tmp_str:
@@ -104,88 +121,6 @@ def get_valid_masks(tokenized_subwords):
             tokens.append(word_token)
 
     return tokens, valid_mask
-
-
-# 构建 typos 负例样本
-def build_typos_neg_examples(
-        examples,
-        tokenizer,
-        neg_total=False,
-        neg_mode='typos',
-        pmi_json=None,
-        preserve_ratio=0.3
-):
-    pmi_filter = None
-    if pmi_json:
-        os.path.exists(pmi_json)
-        pmi_json = json.load(open(pmi_json, "r+", encoding='utf-8'))
-        pmi_filter = {k: v[:int(len(v) * preserve_ratio)] for k, v in
-                      pmi_json.items()}
-
-    neg_examples = []
-    for (ex_index, example) in enumerate(examples):
-        neg_examples.append(
-            auto_neg_sample(
-                example,
-                total=neg_total,
-                mode=neg_mode,
-                tokenizer=tokenizer,
-                pmi_filter=pmi_filter
-            )
-        )
-    return neg_examples
-
-
-def build_ent_mask_examples(
-        examples,
-        tokenizer,
-        mask_ratio=0.85,
-        pmi_json=None,
-        preserve_ratio=0.3,
-        mask_token='[MASK]'
-):
-    pmi_filter = None
-    if pmi_json:
-        os.path.exists(pmi_json)
-        pmi_json = json.load(open(pmi_json, "r+", encoding='utf-8'))
-        pmi_filter = {k: v[:int(len(v) * preserve_ratio)] for k, v in
-                      pmi_json.items()}
-
-    masked_examples = []
-
-    for index, example in enumerate(examples):
-        entities = list(get_entities(example.labels))
-        new_example = copy.deepcopy(example)
-        random_num = random.uniform(0, 1)
-
-        # if not entities and random_num < 0.5:
-        if not entities:
-            masked_examples.append(new_example)
-            continue
-
-        for entity in entities:
-            i, j = entity[1:]
-            random_num = random.uniform(0, 1)
-
-            rep_words = [mask_token for _ in range(i, j + 1)]
-            new_example.words = new_example.words[:i] + rep_words + \
-                                new_example.words[j + 1:]
-
-            # if random_num < mask_ratio:  # replace by [MASK]
-            #     rep_words = [mask_token for _ in range(i, j+1)]
-            #     new_example.words = new_example.words[:i] + rep_words + \
-            #                         new_example.words[j + 1:]
-            # elif random_num < mask_ratio + (1 - mask_ratio) / 2:  # replace with typos words
-            #     rep_words = mask_rand_typos(new_example, entity, tokenizer,
-            #                                 PMI_filter=pmi_filter)
-            #
-            #     new_example.words = new_example.words[:i] + rep_words + \
-            #                         new_example.words[j + 1:]
-
-        assert len(new_example.words) == len(new_example.labels)
-        masked_examples.append(new_example)
-
-    return masked_examples
 
 
 # 将 example 改为模型的输入，当输入长度tokenize之后超过最大长度时，evaluate 可能会报错
@@ -254,7 +189,8 @@ def convert_examples_to_features(
                 real_span_mask_ltoken=feature[11],
                 words=feature[12],
                 all_span_word=feature[13],
-                all_span_idxs=feature[14]
+                all_span_idxs=feature[14],
+                switch_idx=feature[15]
             )
         )
 
@@ -367,25 +303,22 @@ def convert2tokenIdx(words, valid_mask, span_idxs, seidxs_format):
         i, j = offsets[word_id]
         origin_offset2token_sidx[word_id] = i + 1
         origin_offset2token_eidx[word_id] = j + 1
-
-
-
-    # print('origin_offset2token_sidx:')
-    # print(origin_offset2token_sidx)
-    # print('origin_offset2token_eidx:')
-    # print(origin_offset2token_eidx)
-
  
     span_new_sidxs = []
     span_new_eidxs = []
     n_span_keep = 0
 
     for start, end in span_idxs:
-        if origin_offset2token_eidx[end] > max_length - 1 or origin_offset2token_sidx[start] > max_length - 1:
-            continue
-        span_new_sidxs.append(origin_offset2token_sidx[start])
-        span_new_eidxs.append(origin_offset2token_eidx[end])
-        n_span_keep += 1
+        try:
+            if origin_offset2token_eidx[end] > max_length - 1 or origin_offset2token_sidx[start] > max_length - 1:
+                continue
+            span_new_sidxs.append(origin_offset2token_sidx[start])
+            span_new_eidxs.append(origin_offset2token_eidx[end])
+            n_span_keep += 1
+        except Exception:
+            print(words)
+            print(span_idxs)
+            raise Exception('Stop')
 
 
     all_span_word = []
@@ -439,7 +372,6 @@ def example_to_feature(
     label_map = {label: i for i, label in enumerate(label_list)}
     tokens, valid_mask = get_valid_masks(tokenized_words)
     label_ids = [label_map[label] for label in example.labels]
-    # print('\nvalid mask len:{}'.format(len(valid_mask)))
 
     tmp_label_ids = label_ids[:]
     tmp_label_ids.append(-1)
@@ -447,6 +379,7 @@ def example_to_feature(
     eidxs = []
     seidxs_format = {}
     tmp_k = 0
+
     while tmp_k < len(tmp_label_ids):
         if tmp_label_ids[tmp_k] != 0 and tmp_label_ids[tmp_k] != -1:
             sidxs.append(tmp_k)
@@ -456,15 +389,18 @@ def example_to_feature(
             seidxs_format[str(sidxs[-1]) + ';' + str(eidxs[-1])] = tmp_label_ids[tmp_k]
 
         tmp_k += 1
-    
+
+    # added by wangxiao, 最后要做越界判断
+    switch_idx = 0
 
     # convert the span position into the character index, space is also a position.
     pos_span_idxs = []
+    idx =0
     for sidx, eidx in zip(sidxs, eidxs):
         pos_span_idxs.append((sidx, eidx))
-
-    # print('pos_span_idxs:')
-    # print(pos_span_idxs)
+        if sidx == example.switch_start and eidx == example.switch_end:
+            switch_idx = idx
+        idx += 1
 
     # all span (sidx, eidx)
     all_span_idxs = enumerate_spans(example.words, offset=0, max_span_width=max_spanLen)
@@ -500,6 +436,9 @@ def example_to_feature(
     all_span_weights = all_span_weights[:max_num_span]
     all_span_idxs = all_span_idxs[:max_num_span]
 
+    # added by wangxiao
+    switch_idx = min(switch_idx, len(all_span_weights) - 1)
+
     import numpy as np
     real_span_mask_ltoken = np.ones_like(span_label_ltoken).tolist()
 
@@ -510,8 +449,6 @@ def example_to_feature(
     morph_idxs = span_padding(morph_idxs, value=[0,0,0,0], max_length=max_num_span)
     all_span_weights = span_padding(all_span_weights, value=0, max_length=max_num_span)
     all_span_idxs = span_padding(all_span_idxs, value=(0, 0), max_length=max_num_span)
-
-
 
     # Account for [CLS] and [SEP] with "- 2" and with "- 3" for RoBERTa.
     special_tokens_count = 3 if sep_token_extra else 2
@@ -572,9 +509,10 @@ def example_to_feature(
     while (len(label_ids) < max_seq_length):
         label_ids.append(pad_token_label_id)
 
-
-
-    return tokens, input_ids, input_mask, valid_mask, segment_ids, label_ids,   all_span_idxs_ltoken, morph_idxs, span_label_ltoken, all_span_lens, all_span_weights, real_span_mask_ltoken, example.words, all_span_word, all_span_idxs
+    return tokens, input_ids, input_mask, valid_mask, segment_ids, label_ids,   \
+           all_span_idxs_ltoken, morph_idxs, span_label_ltoken, all_span_lens, all_span_weights, \
+           real_span_mask_ltoken, example.words, all_span_word, all_span_idxs, \
+           switch_idx
 
 
 # [1, subword_len], [subword_len]
@@ -601,6 +539,17 @@ def collate_fn(batch):
     # 17all_span_idxs_ltoken, 18morph_idxs, 19span_label_ltoken, 20all_span_lens, 
     # 21all_span_weights, 22real_span_mask_ltoken, 23all_span_idxs
 
+    # typos constraint training
+    # pos batch:
+    # 0all_input_ids, 1all_input_mask, 2all_valid_mask, 3all_segment_ids, 4all_label_ids,
+    # 5all_span_idxs_ltoken, 6morph_idxs, 7span_label_ltoken, 8all_span_lens,
+    # 9all_span_weights, 10real_span_mask_ltoken, 11all_span_idxs,  12switch_idx
+
+    # neg batch:
+    # 13all_input_ids, 14all_input_mask, 15all_valid_mask, 16all_segment_ids, 17all_label_ids,
+    # 18all_span_idxs_ltoken, 19morph_idxs, 20span_label_ltoken, 21all_span_lens,
+    # 22all_span_weights, 23real_span_mask_ltoken, 24all_span_idxs, 25trans_switch_idx
+
     batch_tuple = tuple(map(torch.stack, zip(*batch)))
 
     batch_lens = torch.sum(batch_tuple[2], dim=-1, keepdim=False)
@@ -618,12 +567,13 @@ def collate_fn(batch):
     neg_max_len = neg_batch_lens.max().item()
     neg_sub_max_len = neg_sub_batch_lens.max().item()
     neg_max_span_len = min(502, 4 * neg_max_len - 6)
-    
-    if max_span_len != neg_max_span_len:
-        # TODO
-        # print('not equal : {}-{}'.format(max_span_len, neg_max_span_len))
-        max_span_len = min(max_span_len, neg_max_span_len)
-        neg_max_span_len = max_span_len
+
+    # just typos , total MSE need this code
+    # if max_span_len != neg_max_span_len:
+    #     # TODO
+    #     # print('not equal : {}-{}'.format(max_span_len, neg_max_span_len))
+    #     max_span_len = min(max_span_len, neg_max_span_len)
+    #     neg_max_span_len = max_span_len
 
     results = ()
 
@@ -634,12 +584,12 @@ def collate_fn(batch):
             elif(i == 5 or i == 6 or i == 11):
                 results += (batch_tuple[i][:, :max_span_len, :], )
 
-            elif(i >= 12 and i <= 16):
+            elif(i >= 13 and i <= 17):
                 results += (batch_tuple[i][:, :neg_sub_max_len],)
-            elif(i == 17 or i == 18 or i == 23):
+            elif(i == 18 or i == 19 or i == 24):
                 results += (batch_tuple[i][:, :neg_max_span_len, :],)
 
-            elif(i >= 19 and i<=22):
+            elif(i >= 20 and i<=23):
                 results += (batch_tuple[i][:, :neg_max_span_len],)
 
             else:
@@ -662,205 +612,6 @@ def get_labels(path):
                 "I-PER", "B-ORG", "I-ORG", "B-LOC", "I-LOC"]
 
 
-# 为了保证 neg 里保留的 subword 会被重新切分出来，直接返回替换后subword的tokenize序列
-def auto_neg_sample(
-    origin_sample,
-    total=False,
-    mode='typos',
-    tokenizer=None,
-    pmi_filter=None
-):
-    if total:
-        if mode == "typos":
-            return total_rand_typos(origin_sample, tokenizer, pmi_filter)
-        elif mode == "ngram":
-            return total_rand_ngram(origin_sample, tokenizer, pmi_filter)
-        else:
-            raise NotImplementedError("Not support {} mode!".format(mode))
-    else:
-        if mode == "typos":
-            return part_rand_typos(origin_sample, tokenizer, pmi_filter)
-        elif mode == "ngram":
-            return part_rand_ngram(origin_sample, tokenizer, pmi_filter)
-        else:
-            raise NotImplementedError("Not support {} mode!".format(mode))
-
-
-def rand_replace(rep_fun):
-    """
-    实体词按照某种模式替换
-    """
-    def gen_neg_subwords(example, tokenizer, PMI_filter=None):
-        neg_example = copy.deepcopy(example)
-        entities = list(get_entities(neg_example.labels))
-
-        if not entities:
-            return copy.deepcopy(example)
-
-        # 默认一个sample只操作一个实体序列
-        entity = random.choice(entities)
-        i, j = entity[1:]
-        rep_words = rep_fun(example, entity, tokenizer, PMI_filter=PMI_filter)
-
-        neg_example.words = neg_example.words[:i] + rep_words + \
-                            neg_example.words[j+1:]
-
-        assert len(neg_example.words) == len(neg_example.labels)
-
-        return neg_example
-
-    return gen_neg_subwords
-
-
-@rand_replace
-def total_rand_ngram(example, entity, tokenizer, PMI_filter=None):
-    """
-    实体词全部替换为随机的ngram
-    """
-    i, j = entity[1:]
-    ngrams = [generate_ngram() for _ in range(i, j+1)]
-
-    return ngrams
-
-
-@rand_replace
-def total_rand_typos(example, entity, tokenizer, PMI_filter=None):
-    """
-    实体词全部加入Typos
-
-    """
-    i, j = entity[1:]
-    typos_list = []
-
-    for idx in range(i, j + 1):
-        candidate = typos.get_candidates(example.words[idx], n=1)
-        if candidate:
-            candidate = candidate[0]
-        else:
-            candidate = example.words[idx]
-        typos_list.append(candidate)
-
-    return typos_list
-
-
-@rand_replace
-def part_rand_ngram(example, entity, tokenizer, PMI_filter=None):
-    """
-    只用 ngram 替换 PMI 值低的 subword
-
-    """
-    i, j = entity[1:]
-    new_words = []
-
-    for token in example.words[i: j+1]:
-        subwords = tokenizer.tokenize(token)
-        new_subwords = []
-
-        for subword in subwords:
-            # sub word 和 PMI_filer 都带有 ## 表示
-            if subword in PMI_filter[entity[0]]:
-                new_subwords.append(subword)
-            else:
-                # 判断 ##
-                rep_subword = generate_ngram()
-                if subword[:2] == '##':
-                    rep_subword = '##' + rep_subword
-                new_subwords += rep_subword
-        # 如果将tokenize的subword加入subwords，会极大地加长subword的数目
-        new_words.append(reverse_BERT_tokenize(new_subwords))
-
-    return new_words
-
-
-@rand_replace
-def part_rand_typos(example, entity, tokenizer, PMI_filter=None):
-    """
-    只向 PMI 值低的 subword 中插入 typos
-
-    """
-    i, j = entity[1:]
-    new_words = []
-
-    for token in example.words[i: j+1]:
-        subwords = tokenizer.tokenize(token)
-        # 保存的是一个词对应的subword
-        new_subwords = []
-
-        for subword in subwords:
-            if subword in PMI_filter[entity[0]]:
-                new_subwords.append(subword)
-            else:
-                # 判断 ##
-                sub_wo_sig = subword[2:] if '##' == subword[:2] else subword
-                rep_subwords = typos.get_candidates(sub_wo_sig, n=1)
-
-                if rep_subwords:
-                    rep_subword = rep_subwords[0]
-                else:
-                    rep_subword = sub_wo_sig
-
-                if subword[:2] == '##':
-                    rep_subword = '##' + rep_subword
-                new_subwords.append(rep_subword)
-        new_words.append(reverse_BERT_tokenize(new_subwords))
-
-    assert(len(new_words) == j-i+1)
-
-    return new_words
-
-
-def mask_rand_typos(example, entity, tokenizer, PMI_filter=None):
-    """
-    只向 PMI 值低的 subword 中插入 typos
-
-    """
-    i, j = entity[1:]
-    new_words = []
-
-    for token in example.words[i: j+1]:
-        subwords = tokenizer.tokenize(token)
-        # 保存的是一个词对应的subword
-        new_subwords = []
-
-        for subword in subwords:
-            if subword in PMI_filter[entity[0]]:
-                new_subwords.append(subword)
-            else:
-                # 判断 ##
-                sub_wo_sig = subword[2:] if '##' == subword[:2] else subword
-                rep_subwords = typos.get_candidates(sub_wo_sig, n=1)
-
-                if rep_subwords:
-                    rep_subword = rep_subwords[0]
-                else:
-                    rep_subword = sub_wo_sig
-
-                if subword[:2] == '##':
-                    rep_subword = '##' + rep_subword
-                new_subwords.append(rep_subword)
-        new_words.append(reverse_BERT_tokenize(new_subwords))
-
-    assert(len(new_words) == j-i+1)
-
-    return new_words
-
-
-def reverse_BERT_tokenize(segs):
-    """
-    将BERT对单个词的tokenize结果还原
-    :param segs:
-    :return:
-    """
-    text = ' '.join([x for x in segs])
-    return text.replace(' ##', '')
-
-
-def generate_ngram(seed=42):
-    chars = string.ascii_letters
-    ngram_len = random.randint(2, 5)
-    random_str = ''.join([random.choice(chars) for i in range(ngram_len)])
-
-    return random_str
 
 
 if __name__ == "__main__":

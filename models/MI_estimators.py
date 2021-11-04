@@ -202,7 +202,7 @@ class InfoNCE(nn.Module):
         lower_bound = T0 - T1.logsumexp(dim=1)  # torch.log(T1.exp().mean(dim = 1)).mean()
 
         # compute the negative loss (maximise loss == minimise -loss)
-        return lower_bound.mean()
+        return lower_bound.mean() * -1
 
     def span_mi_loss(self, x_spans, x_span_idxes, y_spans, y_span_idxes):
         """
