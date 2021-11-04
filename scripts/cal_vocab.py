@@ -31,12 +31,12 @@ def get_entities_bio(seq):
                 chunks.append(chunk)
             chunk = [-1, -1, -1]
             chunk[1] = indx
-            chunk[0] = tag.split('-')[1]
+            chunk[0] = tag.replace("B-", "")
             chunk[2] = indx
             if indx == len(seq) - 1:
                 chunks.append(chunk)
         elif tag.startswith('I-') and chunk[1] != -1:
-            _type = tag.split('-')[1]
+            _type = tag.replace("I-", "")
             if _type == chunk[0]:
                 chunk[2] = indx
 
@@ -101,6 +101,7 @@ def get_entity(training_file, entity_out):
 
     feo = open(entity_out, "w+", encoding='utf-8')
     json.dump(vocab_dic, feo, ensure_ascii=False, indent=2)
+    print('Finish pmi count!')
 
     fi.close()
     feo.close()
@@ -150,8 +151,20 @@ def calculate_PMI(entity_dic, tokenizer_path, out_path):
 
     fo = open(out_path, "w+", encoding='utf-8')
     json.dump(PMI, fo, ensure_ascii=False, indent=2)
+    print('Finish pmi sort!!')
 
     return PMI
+
+def out_labels(pmi_json, out='labels.txt'):
+    with open(out, "w+", encoding='utf-8') as fo:
+        fo.write('O\n')
+
+        for key in pmi_json:
+            if key=='O':
+                continue
+            else:
+                fo.write("{}\n".format(key))
+    print('Finish out labels')
 
 
 def tokenize(token, tokenizer):
@@ -189,15 +202,16 @@ def count_len_subword(pmi_json):
 
 if __name__ == '__main__':
     from prettyprinter import cpprint
-    training_file = '../data/OpenNER/origin/train.txt'
-    entity_out = 'entity_test.txt'
+    training_file = '../data/WNUT2017/origin/train.txt'
+    entity_out = 'pmi.json'
     entity_json = get_entity(training_file, entity_out)
     # # eo = open(entity_out, 'r+', encoding='utf-8')
     # # entity_json = json.load(eo)
     # # eo.close()
-    pmi_out = 'pmi.txt'
+    pmi_out = 'pmi.json'
     tokenizer_conf_path = '/root/MODELS/bert-base-uncased/'
     PMI = calculate_PMI(entity_json, tokenizer_conf_path, entity_out)
+    out_labels(PMI)
     #
     # ratio = 0.05
     #
@@ -208,7 +222,7 @@ if __name__ == '__main__':
     #     cpprint(token_pmi[:int(len(token_pmi)*ratio)])
 
 
-    # calculate length
-    tokenizer_conf_path = '/root/MODELS/bert-base-uncased/'
-    load_tokenizer(tokenizer_conf_path)
-    count_len_subword(PMI)
+    # # calculate length
+    # tokenizer_conf_path = '/root/MODELS/bert-base-uncased/'
+    # load_tokenizer(tokenizer_conf_path)
+    # count_len_subword(PMI)

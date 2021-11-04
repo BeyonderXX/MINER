@@ -14,7 +14,6 @@ def reading_file(path):
 def open2conll(path, out_path):
     sample = []
     idx = 0
-    fo = open(out_path + 'full.txt', "w+", encoding='utf-8')
     f_train = open(out_path+ 'train.txt', "w+", encoding='utf-8')
     f_dev = open(out_path+ 'dev.txt', "w+", encoding='utf-8')
     f_test = open(out_path+ 'test.txt', "w+", encoding='utf-8')
@@ -30,23 +29,22 @@ def open2conll(path, out_path):
             if sample:
                 random_num = random.uniform(0, 1)
                 conll_format = sample2conll(sample, idx)
-                fo.write(conll_format)
                 count += 1
 
-                if random_num > 0.9 and train_count < 10000:
-                    f_train.write(conll_format)
-                    train_count += 1
-                elif random_num > 0.9 and dev_count < 2000:
-                    f_dev.write(conll_format)
-                    dev_count += 1
-                elif random_num > 0.9 and test_count < 2000:
+                if random_num > 0.95 and test_count < 10000:
                     f_test.write(conll_format)
                     test_count += 1
+                elif random_num > 0.95 and dev_count < 2000:
+                    f_dev.write(conll_format)
+                    dev_count += 1
+                else:
+                    f_train.write(conll_format)
+                    train_count += 1
 
             sample = []
         idx += 1
     print(count, train_count, dev_count, test_count)
-    fo.close()
+    f_train.close(), f_dev.close(), f_test.close()
 
 
 def sample2conll(sample, idx):
@@ -87,6 +85,6 @@ def sample2conll(sample, idx):
 
 
 if __name__ == "__main__":
-    origin_data = '/Users/wangxiao/code/python/RobustNER/data/OpenNER/movie_song_book_tv_noquote.data'
-    out_dir = '/Users/wangxiao/code/python/RobustNER/data/OpenNER/'
+    origin_data = '/root/RobustNER/data/OpenNER/origin/movie_song_book_tv_noquote.data'
+    out_dir = '/root/RobustNER/data/OpenNER/origin/'
     open2conll(origin_data, out_dir)
