@@ -1,186 +1,146 @@
 from torch import nn
 import torch
-from .bert_ner import BertPreTrainedModel, BertModel, CRF, valid_sequence_output
-from .MI_estimators import CLUB, vCLUB, VIB, kl_div
+from transformers.modeling_bert import BertModel
+from transformers.modeling_bert import BertPreTrainedModel
+from .MI_estimators import VIB, vCLUB, InfoNCE
+from .classifier import MultiNonLinearClassifier
+from .model_utils import span_select
+from .span_layer import SpanLayer
+
+ANNEALING_RATIO = 0.3
+SMALL = 1e-08
+SAMPLE_SIZE = 5
+
+# span embedding settings
+MAX_SPAN_LEN = 4
+MORPH_NUM = 5
+MAX_SPAN_NUM = 502
+TOKEN_LEN_DIM = 50
+SPAN_LEN_DIM = 50
+SPAN_MORPH_DIM = 100
 
 
-class BertCrfWithBN(BertPreTrainedModel):
+class BertSpanNerBN(BertPreTrainedModel):
     def __init__(
         self,
         config,
-        args=None
+        args=None,
+        num_labels=None
     ):
-        super(BertCrfWithBN, self).__init__(config)
-        # encoder 部分
+        super(BertSpanNerBN, self).__init__(config)
+
+        # ---------------- encoder ------------------
         self.bert = BertModel(config)
         self.dropout = nn.Dropout(config.hidden_dropout_prob)
+        self.cross_entropy = torch.nn.CrossEntropyLoss(reduction='none')
+        self.n_class = 5 if not num_labels else num_labels
 
-        # post encoder 部分
-        self.beta = args.beta
-        self.regular_z = args.regular_z
+        # ---------------- span layer ------------------
+        self.span_layer = SpanLayer(config.hidden_size, TOKEN_LEN_DIM, SPAN_LEN_DIM,
+                                    SPAN_MORPH_DIM, MAX_SPAN_LEN, MORPH_NUM)
+        # start + end + token len + span len + morph
+        span_dim = config.hidden_size * 2 + TOKEN_LEN_DIM \
+                   + SPAN_LEN_DIM + SPAN_MORPH_DIM
 
-        if args.mi_estimator is 'VIB':
-            MI_estimator = VIB
-        elif args.mi_estimator is 'CLUB':
-            # TODO, support
-            MI_estimator = CLUB
-        else:
-            raise ValueError('Do not support {} estimator!'.format(args.mi_estimator))
+        # ---------------- classifier ------------------
+        self.span_classifier = MultiNonLinearClassifier(
+            span_dim, self.n_class, dropout_rate=0.2
+        )
+        self.softmax = torch.nn.Softmax(dim=-1)
 
-        self.post_encoder = MI_estimator(
-            embedding_dim=config.hidden_size,
-            hidden_dim=(args.hidden_dim + config.hidden_size) // 2,
+        # ---------------- info bottleneck ------------------
+        # self.sample_size = SAMPLE_SIZE
+        # self.r_mean = nn.Parameter(torch.randn(MAX_SPAN_NUM, args.hidden_dim))
+        # self.r_std = nn.Parameter(torch.randn(MAX_SPAN_NUM, args.hidden_dim))
+
+        self.bn_encoder = VIB(
+            embedding_dim=span_dim,
+            hidden_dim=(args.hidden_dim + span_dim) // 2,
             tag_dim=args.hidden_dim,
             device=args.device
         )
-        # r(t)
-        self.r_mean = nn.Parameter(torch.randn(args.max_seq_length, args.hidden_dim))
-        self.r_log_var = nn.Parameter(torch.randn(args.max_seq_length, args.hidden_dim))
 
-        # I(Z; Y) 部分（decoder部分）
-        self.sample_size = args.sample_size
-        self.classifier = nn.Linear(args.hidden_dim, config.num_labels)
-        self.decoder = CRF(num_tags=config.num_labels, batch_first=True)
+        # ---------------- OOV regular ------------------
+        self.gama = args.gama  # oov regular weights
+        self.oov_reg = vCLUB()
 
-        # I(Z_i;X_i | X_(j!=i))
-        self.regular_entity = args.regular_entity
-        self.gama = args.gama
-        self.entity_regularizer = vCLUB()
+        # ---------------- z infoNCE regular ------------------
+        self.r = args.r
+        self.z_reg = InfoNCE(span_dim, span_dim, args.device)
 
         self.init_weights()
 
-    def forward(
-        self,
-        input_ids,
-        attention_mask=None,
-        token_type_ids=None,
-        valid_mask=None,
-        labels=None,
-        position_ids=None,
-        head_mask=None,
-        inputs_embeds=None,
-        # separate
-        trans_input_ids=None,
-        trans_attention_mask=None,
-        trans_valid_mask=None,
-        trans_token_type_ids=None,
-        trans_labels=None,
-        trans_position_ids=None,
-        trans_head_mask=None,
-        trans_inputs_embeds=None,
-        decode=False
-    ):
+    def forward(self, ori_feas, cont_feas):
         """
         默认有 labels 为 train, 无 labels 为 test
         """
-        origin_out = self.encoding(
-            input_ids,
-            attention_mask,
-            token_type_ids,
-            position_ids,
-            head_mask,
-            inputs_embeds,
-            valid_mask
-        )
+        ori_encoding, cont_encoding = {}, {}
+        ori_encoding['spans_rep'] = self.span_encoding(**ori_feas)
+        cont_encoding['spans_rep'] = self.span_encoding(**cont_feas)
 
-        if trans_input_ids is not None:
-            trans_out = self.encoding(
-                trans_input_ids,
-                trans_attention_mask,
-                trans_token_type_ids,
-                trans_position_ids,
-                trans_head_mask,
-                inputs_embeds,
-                trans_valid_mask
-            )
-            # upper bound of entity
-            entity_mi = self.entity_regularizer.update(origin_out, trans_out)
+        ori_encoding['logits'] = self.span_classifier(ori_encoding['spans_rep'])
+        cont_encoding['logits'] = self.span_classifier(cont_encoding['spans_rep'])
 
-        # p(t|x) 基于采样得到的 mean 和 cov (假设符合高斯分布)
-        mean, log_var = self.post_encoder.get_mu_logvar(origin_out)
-        bsz, seqlen, _ = mean.shape
+        loss_dict = {}
+        outputs = [self.softmax(ori_encoding['logits'])]
 
-        # train sample by IID, test by argmax
-        # (bsz * sample_size, seq_len, tag_dim)
-        if labels is not None:
-            t = self.post_encoder.get_sample_from_param_batch(
-                mean, log_var, self.sample_size
-            )
-            # labels expand
-            labels = labels.unsqueeze(1).repeat(1, self.sample_size, 1) \
-                .view(bsz * self.sample_size, seqlen)
+        if ori_feas['span_labels'] is not None:
+            loss_dict = self.compute_loss(ori_feas, ori_encoding, cont_feas, cont_encoding)
 
-            attention_mask = attention_mask.unsqueeze(1). \
-                repeat(1, self.sample_size, 1). \
-                view(bsz * self.sample_size, seqlen)
-        else:
-            t = mean
+        return outputs, loss_dict  # (loss), scores
 
-        logits = self.classifier(t)
-
-        if decode:
-            tags = self.decoder.decode(logits, attention_mask)
-            outputs = (tags,)
-        else:
-            outputs = (logits,)
-
-        if labels is not None:
-            labels = torch.where(labels >= 0, labels, torch.zeros_like(labels))
-            # reduction 是否为 mean 待确认
-            decoder_log_likely = self.decoder(
-                emissions=logits, tags=labels, mask=attention_mask,
-                # reduction="mean"
-            )
-            # first item loss
-            nlpy_t = -1 * decoder_log_likely
-
-            if self.regular_z:
-                mean_r = self.r_mean[:seqlen].unsqueeze(0).expand(bsz, -1, -1)
-                log_var_r = self.r_log_var[:seqlen].unsqueeze(0).expand(bsz, -1, -1)
-
-                # second item loss
-                kl = kl_div((mean, log_var), (mean_r, log_var_r))
-                nlpy_t += self.beta * kl.mean()
-
-            if self.regular_entity:
-                nlpy_t += self.gama * entity_mi
-
-            outputs = (nlpy_t,) + outputs
-
-        return outputs  # (loss), scores
-
-    def encoding(
+    def span_encoding(
         self,
-        input_ids,
-        attention_mask,
-        token_type_ids,
-        position_ids,
-        head_mask,
-        inputs_embeds,
-        valid_mask
+        input_ids=None,
+        input_mask=None,
+        segment_ids=None,
+        span_token_idxes=None,
+        span_lens=None,
+        morph_idxes=None,
+        **kwargs
     ):
-        # encoder
-        outputs = self.bert(
+        # encoder [batch, seq_len, hidden]
+        sequence_output = self.bert(
             input_ids=input_ids,
-            attention_mask=attention_mask,
-            token_type_ids=token_type_ids,
-            position_ids=position_ids,
-            head_mask=head_mask,
-            inputs_embeds=inputs_embeds
+            attention_mask=input_mask,
+            token_type_ids=segment_ids
         )
-        sequence_output = outputs[0]
-        # 把 padding 部分置零
-        sequence_output, attention_mask = valid_sequence_output(
-            sequence_output,
-            valid_mask,
-            attention_mask
+
+        span_rep = self.span_layer(sequence_output[0], span_token_idxes.long(), span_lens, morph_idxes)
+
+        return span_rep
+
+    def compute_loss(self, ori_feas, ori_encoding, cont_feas, cont_encoding):
+        # ----------compute span classification loss----------
+        loss_dic = {'c': self.compute_clas_loss(ori_feas, ori_encoding),
+                    # 'cc': self.compute_clas_loss(cont_feas, cont_encoding)
+                    }
+
+        # ----------compute KL(p(z_o|t), p(z_c|t)) loss----------
+        x_span_cont, y_span_cont = span_select(
+            ori_encoding['spans_rep'].unsqueeze(1), ori_feas['cont_span_idx'],
+            cont_encoding['spans_rep'].unsqueeze(1), cont_feas['cont_span_idx']
         )
-        sequence_output = self.dropout(sequence_output)
 
-        return sequence_output
+        # entity_dist = self.oov_reg.update(x_span_cont, y_span_cont)
+        # loss_dic['oov'] = self.gama * entity_dist
+        #
+        # # ----------compute MI(z_o, z_c) loss----------
+        # entity_mi = self.r * self.z_reg(x_span_cont, y_span_cont)
+        # loss_dic['mi'] = entity_mi
 
-    def post_encoding(self, sequence_output):
-        # p(t|x) 基于采样得到的 mean 和 cov (假设符合高斯分布)
-        mean, cov = self.post_encoder.get_statistics_batch(sequence_output)
+        # ----------sum loss----------
+        loss_dic['loss'] = sum([item[1] for item in loss_dic.items()])
 
-        return mean, cov
+        return loss_dic
+
+    def compute_clas_loss(self, features, encoding):
+        batch_size, n_span = features['span_labels'].size()
+        ori_span_rep = encoding['logits'].view(-1, self.n_class)
+        ori_span_labels = features['span_labels'].view(-1)
+
+        clas_loss = self.cross_entropy(ori_span_rep, ori_span_labels)
+        clas_loss = clas_loss.view(batch_size, n_span) * features['span_weights']
+        clas_loss = torch.masked_select(clas_loss, features['span_masks'].bool()).mean()
+
+        return clas_loss

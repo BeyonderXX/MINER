@@ -1,9 +1,40 @@
-from collections import defaultdict
-import numpy as np
-from seqeval.metrics import classification_report
 
 
 def get_entities(seq):
+    """Gets entities from sequence.
+    note: BIO
+    Args:
+        seq (list): sequence of labels.
+    Returns:
+        list: list of (chunk_type, chunk_start, chunk_end).
+    Example:
+        seq = ['B-PER', 'I-PER', 'O', 'B-LOC', 'I-PER']
+        get_entity_bio(seq)
+        #output
+        [['PER', 0,1], ['LOC', 3, 3], ['PER', 4, 4]]
+    """
+    if any(isinstance(s, list) for s in seq):
+        seq = [item for sublist in seq for item in sublist + ['O']]
+
+    prev_tag = 'O'
+    prev_type = ''
+    begin_offset = 0
+    chunks = []
+    for i, chunk in enumerate(seq + ['O']):
+        tag = chunk[0]
+        type_ = chunk.split('-')[-1]
+
+        if end_of_chunk(prev_tag, tag, prev_type, type_):
+            chunks.append((prev_type, begin_offset, i - 1))
+        if start_of_chunk(prev_tag, tag, prev_type, type_):
+            begin_offset = i
+        prev_tag = tag
+        prev_type = type_
+
+    return sorted(list(set(chunks)), key=lambda x: x[1])
+
+
+def get_bi_entities(seq):
     """Gets entities from sequence.
     note: BIO
     Args:
@@ -234,64 +265,6 @@ def recall_score(true_entities, pred_entities):
     return score
 
 
-def classification_report(true_entities, pred_entities, digits=5):
-    """Build a text report showing the main classification metrics."""
-    name_width = 0
-    d1 = defaultdict(set)
-    d2 = defaultdict(set)
-    for e in true_entities:
-        d1[e[0]].add((e[1], e[2]))
-        name_width = max(name_width, len(e[0]))
-    for e in pred_entities:
-        d2[e[0]].add((e[1], e[2]))
-
-    last_line_heading = 'macro avg'
-    width = max(name_width, len(last_line_heading), digits)
-
-    headers = ["precision", "recall", "f1-score", "support"]
-    head_fmt = u'{:>{width}s} ' + u' {:>9}' * len(headers)
-    report = "  " + head_fmt.format(u'', *headers, width=width).strip()
-    report += u'\n\n'
-
-    row_fmt = u'{:>{width}s} ' + u' {:>9.{digits}f}' * 3 + u' {:>9}\n'
-
-    ps, rs, f1s, s = [], [], [], []
-    for type_name, type_true_entities in d1.items():
-        type_pred_entities = d2[type_name]
-        nb_correct = len(type_true_entities & type_pred_entities)
-        nb_pred = len(type_pred_entities)
-        nb_true = len(type_true_entities)
-
-        p = nb_correct / nb_pred if nb_pred > 0 else 0
-        r = nb_correct / nb_true if nb_true > 0 else 0
-        f1 = 2 * p * r / (p + r) if p + r > 0 else 0
-
-        report += row_fmt.format(*[type_name, p, r, f1, nb_true], width=width, digits=digits)
-
-        ps.append(p)
-        rs.append(r)
-        f1s.append(f1)
-        s.append(nb_true)
-
-    report += u'\n'
-
-    # compute averages
-    report += row_fmt.format('micro avg',
-                             precision_score(true_entities, pred_entities),
-                             recall_score(true_entities, pred_entities),
-                             f1_score(true_entities, pred_entities),
-                             np.sum(s),
-                             width=width, digits=digits)
-    report += row_fmt.format(last_line_heading,
-                             np.average(ps, weights=s),
-                             np.average(rs, weights=s),
-                             np.average(f1s, weights=s),
-                             np.sum(s),
-                             width=width, digits=digits)
-
-    return report
-
-
 def convert_span_to_bio(starts, ends):
     labels = []
     for start, end in zip(starts, ends):
@@ -303,7 +276,3 @@ def convert_span_to_bio(starts, ends):
         labels.append(label)
     return labels
 
-# starts = [['O', 'O', 'O', 'MISC', 'O', 'O', 'O'], ['PER', 'O', 'O']]
-# ends = [['O', 'O', 'O', 'O', 'O', 'MISC', 'O'], ['O', 'PER', 'O']]
-#
-# print(convert_span_to_bio(starts, ends))

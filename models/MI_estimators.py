@@ -1,12 +1,11 @@
 import numpy as np
 
+import math
 import torch
 import torch.nn as nn
 from abc import ABC, abstractmethod
 
-# TODO， hidden_size 调整
-lowersize = 40
-hiddensize = 8
+
 SMALL = 1e-08
 
 
@@ -30,14 +29,18 @@ class UpperWithPosterior(UpperBound):
     ):
         super(UpperWithPosterior, self).__init__()
         self.device = device
+        # u
         self.p_mu = nn.Sequential(nn.Linear(embedding_dim, hidden_dim),
-                                  nn.ReLU(),
+                                  # nn.ReLU(),
+                                  nn.Tanh(),
                                   nn.Linear(hidden_dim, tag_dim))
-
+        # log(σ**2)
         self.p_log_var = nn.Sequential(nn.Linear(embedding_dim, hidden_dim),
-                                       nn.ReLU(),
+                                       nn.Tanh(),
+                                       # nn.ReLU(),
                                        nn.Linear(hidden_dim, tag_dim),
-                                       nn.Tanh())
+                                       # nn.Tanh()
+                                       )
 
     # 返回 u , log(σ**2)
     def get_mu_logvar(self, embeds):
@@ -47,22 +50,25 @@ class UpperWithPosterior(UpperBound):
         return mean, log_var
 
     def loglikeli(self, y_samples, mu, log_var):
-
-        return (-(mu - y_samples) ** 2 / log_var.exp() - log_var).sum(dim=1).mean(dim=0)
+        # [batch, seq_len, dim]
+        return (-0.5 * (mu - y_samples) ** 2 / log_var.exp()
+                + log_var
+                + torch.log(math.pi)
+                ).sum(dim=1).mean(dim=0)
 
     # 从正态分布中 sample 样本
     def get_sample_from_param_batch(self, mean, log_var, sample_size):
         bsz, seqlen, tag_dim = mean.shape
         z = torch.randn(bsz, sample_size, seqlen, tag_dim).to(self.device)
 
-        z = z * torch.exp(log_var).unsqueeze(1).expand(-1, sample_size, -1, -1) + \
+        z = z * torch.exp(0.5 * log_var).unsqueeze(1).expand(-1, sample_size, -1, -1) + \
             mean.unsqueeze(1).expand(-1, sample_size, -1, -1)
 
-        return z.view(-1, seqlen, tag_dim)
+        # [batch * sample_size, seq_len, tag_dim]
+        return z
 
     @abstractmethod
     def update(self, y_samples):
-
         raise NotImplementedError
 
 
@@ -70,7 +76,6 @@ class VIB(UpperWithPosterior):
     """
     Deep Variational Information Bottleneck
     """
-
     # 表示该高斯分布与 N（0，1）之间的KL散度
     def update(self, x_samples):  # [nsample, 1]
         mu, logvar = self.get_mu_logvar(x_samples)
@@ -130,11 +135,34 @@ class vCLUB(UpperBound):
                mi estimation [nsample, 1]
         """
         positive = torch.zeros_like(y_samples)
-        #
+
         negative = - (y_samples - y_n_samples) ** 2 / 2.
         upper_bound = (positive.sum(dim=-1) - negative.sum(dim=-1)).mean()
         # return upper_bound/2.
         return upper_bound
+
+    def mse(self, y_samples, y_n_samples):
+        """
+        approximate q(y|x) - q(y'|x)
+
+        :param y_samples: [-1, 1, hidden_dim]
+        :param y_n_samples: [-1, 1, hidden_dim]
+        :return:
+               mi estimation [nsample, 1]
+        """
+
+        return (y_samples - y_n_samples) ** 2 / 2
+
+    def consine(self, y_samples, y_n_samples):
+        """
+        approximate q(y|x) - q(y'|x)
+
+        :param y_samples: [-1, 1, hidden_dim]
+        :param y_n_samples: [-1, 1, hidden_dim]
+        :return:
+               mi estimation [nsample, 1]
+        """
+        return torch.cosine_similarity(y_samples, y_n_samples, dim=-1)
 
     def loglikeli(self, x_samples, y_samples):
         return 0
@@ -144,15 +172,15 @@ class vCLUB(UpperBound):
         return self.mi_est(y_samples, y_n_samples)
 
 
-# TODO
 class InfoNCE(nn.Module):
-    def __init__(self, x_dim, y_dim):
+    def __init__(self, x_dim, y_dim, device=None):
         super(InfoNCE, self).__init__()
-        self.lower_size = 300
+        self.lower_size = 100
         self.F_func = nn.Sequential(nn.Linear(x_dim + y_dim, self.lower_size),
                                     nn.ReLU(),
                                     nn.Linear(self.lower_size, 1),
                                     nn.Softplus())
+        self.device = device
 
     def forward(self, x_samples, y_samples):  # samples have shape [sample_size, dim]
         # shuffle and concatenate
@@ -163,25 +191,48 @@ class InfoNCE(nn.Module):
         y_tile = y_samples.unsqueeze(1).repeat((1, sample_size, 1))
 
         T0 = self.F_func(torch.cat([x_samples, y_samples], dim=-1))
-        T1 = self.F_func(torch.cat([x_tile, y_tile], dim=-1))  # [s_size, s_size, 1]
+        try:
+            T1 = self.F_func(torch.cat([x_tile, y_tile], dim=-1))  # [s_size, s_size, 1]
+        except Exception:
+            print('Debug')
 
-        lower_bound = T0.mean() - (
-                    T1.logsumexp(dim=1).mean() - np.log(sample_size))  # torch.log(T1.exp().mean(dim = 1)).mean()
+        lower_bound = T0 - T1.logsumexp(dim=1)  # torch.log(T1.exp().mean(dim = 1)).mean()
 
         # compute the negative loss (maximise loss == minimise -loss)
-        return lower_bound
+        return lower_bound.mean() * -1
+
+    def span_mi_loss(self, x_spans, x_span_idxes, y_spans, y_span_idxes):
+        """
+
+        :param x_spans: (bsz, span_num, dim)
+        :param x_span_idxes: (bsz)
+        :param y_spans: (bsz, span_num, dim)
+        :param y_span_idxes: (bsz)
+        :return:
+        """
+        bsz, sample_size, _, dim = x_spans.shape
+        x_span_idxes = x_span_idxes.unsqueeze(1).unsqueeze(1).repeat(1, 1, dim)
+        y_span_idxes = y_span_idxes.unsqueeze(1).unsqueeze(1).repeat(1, 1, dim)
+
+        try:
+            x_spans_con = x_spans[:, 0, :, :].squeeze(axis=1).gather(1, x_span_idxes).squeeze(1)
+            y_spans_con = y_spans[:, 0, :, :].squeeze(axis=1).gather(1, y_span_idxes).squeeze(1)
+        except Exception:
+            print('Error!')
+
+        info_nce_loss = self.forward(x_spans_con, y_spans_con)
+
+        return info_nce_loss * -1
+
 
 
 def kl_div(param1, param2):
     """
     Calculates the KL divergence between a categorical distribution and a
     uniform categorical distribution.
-    Parameters
-    ----------
-    alpha : torch.Tensor
-        Parameters of the categorical or gumbel-softmax distribution.
-        Shape (N, D)
+
     """
+    # u, log(std**2)
     mean1, log_cov1 = param1
     mean2, log_cov2 = param2
     cov1 = log_cov1.exp()
@@ -206,4 +257,17 @@ def kl_div(param1, param2):
             + torch.bmm(temp, mean_diff.view(bsz, -1, 1)).view(bsz)
     )
 
-    return KL
+    return KL.mean()
+
+
+def kl_norm(mu, log_var):
+    """
+
+    :param mu: u
+    :param log_var: log(std**2)
+
+    :return:
+        D_kl(N(u, std**2), N(0, 1))
+    """
+
+    return -0.5 * torch.sum(1 + log_var - mu ** 2 - log_var.exp(), dim=1).mean()

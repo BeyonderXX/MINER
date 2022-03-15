@@ -1,5 +1,4 @@
-# RSE-NER
-Restrain the specific entity tokens for robust NER
+# MINER
 
 
 ## dataset list
@@ -8,14 +7,10 @@ Restrain the specific entity tokens for robust NER
 
 ## model_list
 
-1. (bert, roberta) + softmax
-2. (bert, roberta) + crf
-2. (bert, roberta) + span
+1. (bert, roberta, albert) + SpanNER
 
 ## requirement
 
 1. Pytorch=1.1.0+
 2. transformers=2.8.0
 
-## run the code
-1. `sh scripts/run_xxx_ner.sh`
