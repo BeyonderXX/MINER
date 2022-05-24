@@ -18,6 +18,7 @@ MAX_SPAN_NUM = 502
 TOKEN_LEN_DIM = 50
 SPAN_LEN_DIM = 50
 SPAN_MORPH_DIM = 100
+BOTTLE_NECK_DIM = 50
 
 
 class BertSpanNerBN(BertPreTrainedModel):
@@ -50,22 +51,22 @@ class BertSpanNerBN(BertPreTrainedModel):
 
         # ---------------- info bottleneck ------------------
         # self.sample_size = SAMPLE_SIZE
-        # self.r_mean = nn.Parameter(torch.randn(MAX_SPAN_NUM, args.hidden_dim))
-        # self.r_std = nn.Parameter(torch.randn(MAX_SPAN_NUM, args.hidden_dim))
+        # self.r_mean = nn.Parameter(torch.randn(MAX_SPAN_NUM, BOTTLE_NECK_DIM))
+        # self.r_std = nn.Parameter(torch.randn(MAX_SPAN_NUM, BOTTLE_NECK_DIM))
 
         self.bn_encoder = VIB(
             embedding_dim=span_dim,
-            hidden_dim=(args.hidden_dim + span_dim) // 2,
-            tag_dim=args.hidden_dim,
+            hidden_dim=(BOTTLE_NECK_DIM + span_dim) // 2,
+            tag_dim=BOTTLE_NECK_DIM,
             device=args.device
         )
 
         # ---------------- OOV regular ------------------
-        self.gama = args.gama  # oov regular weights
+        self.beta = args.beta  # oov regular weights
         self.oov_reg = vCLUB()
 
         # ---------------- z infoNCE regular ------------------
-        self.r = args.r
+        self.gama = args.gama
         self.z_reg = InfoNCE(span_dim, span_dim, args.device)
 
         self.init_weights()
@@ -77,28 +78,24 @@ class BertSpanNerBN(BertPreTrainedModel):
         ori_encoding, cont_encoding = {}, {}
         ori_encoding['spans_rep'] = self.span_encoding(**ori_feas)
         cont_encoding['spans_rep'] = self.span_encoding(**cont_feas)
-
         ori_encoding['logits'] = self.span_classifier(ori_encoding['spans_rep'])
-        cont_encoding['logits'] = self.span_classifier(cont_encoding['spans_rep'])
+        # cont_encoding['logits'] = self.span_classifier(cont_encoding['spans_rep'])
 
         loss_dict = {}
         outputs = [self.softmax(ori_encoding['logits'])]
 
         if ori_feas['span_labels'] is not None:
+            # TODO, test stop gradient of cont features
+            # cont_encoding['spans_rep'].detach()
             loss_dict = self.compute_loss(ori_feas, ori_encoding, cont_feas, cont_encoding)
 
         return outputs, loss_dict  # (loss), scores
 
-    def span_encoding(
-        self,
-        input_ids=None,
-        input_mask=None,
-        segment_ids=None,
-        span_token_idxes=None,
-        span_lens=None,
-        morph_idxes=None,
-        **kwargs
-    ):
+    def span_encoding(self, input_ids=None, input_mask=None, segment_ids=None,
+                      span_token_idxes=None, span_lens=None, morph_idxes=None, **kwargs):
+        """
+        Encode tokens by Bert, and get span representations.
+        """
         # encoder [batch, seq_len, hidden]
         sequence_output = self.bert(
             input_ids=input_ids,
@@ -111,6 +108,9 @@ class BertSpanNerBN(BertPreTrainedModel):
         return span_rep
 
     def compute_loss(self, ori_feas, ori_encoding, cont_feas, cont_encoding):
+        """
+        计算loss, 包括: span分类loss, gi loss, si loss
+        """
         # ----------compute span classification loss----------
         loss_dic = {'c': self.compute_clas_loss(ori_feas, ori_encoding),
                     # 'cc': self.compute_clas_loss(cont_feas, cont_encoding)
@@ -122,12 +122,12 @@ class BertSpanNerBN(BertPreTrainedModel):
             cont_encoding['spans_rep'].unsqueeze(1), cont_feas['cont_span_idx']
         )
 
-        # entity_dist = self.oov_reg.update(x_span_cont, y_span_cont)
-        # loss_dic['oov'] = self.gama * entity_dist
-        #
-        # # ----------compute MI(z_o, z_c) loss----------
-        # entity_mi = self.r * self.z_reg(x_span_cont, y_span_cont)
-        # loss_dic['mi'] = entity_mi
+        entity_dist = self.oov_reg.update(x_span_cont, y_span_cont)
+        loss_dic['si'] = self.beta * entity_dist
+
+        # ----------compute MI(z_o, z_c) loss----------
+        entity_mi = self.gama * self.z_reg(x_span_cont, y_span_cont)
+        loss_dic['gi'] = entity_mi
 
         # ----------sum loss----------
         loss_dic['loss'] = sum([item[1] for item in loss_dic.items()])
@@ -135,6 +135,9 @@ class BertSpanNerBN(BertPreTrainedModel):
         return loss_dic
 
     def compute_clas_loss(self, features, encoding):
+        """
+        计算分类loss.
+        """
         batch_size, n_span = features['span_labels'].size()
         ori_span_rep = encoding['logits'].view(-1, self.n_class)
         ori_span_labels = features['span_labels'].view(-1)

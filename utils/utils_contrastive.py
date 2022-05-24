@@ -19,6 +19,7 @@ class InputExample(object):
         Args:
             guid: Unique id for the example.
             words: list. The words of the sequence.
+
         """
         self.guid = guid
         self.words = words

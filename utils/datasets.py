@@ -64,6 +64,7 @@ class SpanNerDataset(Dataset):
         cont_ent_idxes = []
 
         for example in examples:
+            # 仍然有可能越界， 这里是word的起始位置，max_seq_len是token索引
             ent_span_idxes = [entity[1:] for entity in example.entities if entity[2] < max_seq_len]
             if ent_span_idxes:
                 cont_ent_idxes.append(random.choice(range(len(ent_span_idxes))))
@@ -77,6 +78,22 @@ class SpanNerDataset(Dataset):
                          ent_weight=1.0, non_ent_weight=0.5,
                          pad_token_segment_id=0, pad_label_id=0,
                          sep_token_extra=False):
+        """
+        将 example 转为数值特征。
+
+        Return:
+            input_ids: token id (after padding)
+            input_mask: token mask，which is required by BERT
+            segment_ids: BERT sentence segment id
+            span_token_idxes: list of (span_start_token_index, span_end_token_index)
+            span_labels: span label indexes
+            span_weights: span loss weight, 0.5 for None, 1 for entity span
+            morph_idxes: morph feature of span
+            span_lens: length feature of span
+            span_masks: span mask, which is required by SpanNER
+            cont_span_idx: index of contrastive ent span
+            span_word_idxes: list of (span_start_word_index, span_end_word_index)
+        """
         numeric_features = []
         label_map = {ent_type: idx for idx, ent_type in enumerate(labels)}
 
@@ -90,7 +107,7 @@ class SpanNerDataset(Dataset):
             max_token_num = max_seq_len - special_tokens_count
 
             span_token_idxes, n_keep = convert_2_token_idx(example.offsets, span_word_idxes, max_len=max_token_num)
-            assert len(span_token_idxes) == n_keep
+            # assert len(span_token_idxes) == n_keep
 
             # begin{compute the span weight}
             span_weights = []  # return
@@ -102,7 +119,7 @@ class SpanNerDataset(Dataset):
                     span_weights.append(ent_weight)
                     span_type = example.entities[ent_span_idxes.index(span_idx)][0]
                     span_labels.append(label_map[span_type])
-                    # 怎么对应正例和对比样例的索引
+                    # 正例和负例的对比实体，在各自实体列表里位置相同（前提负例目标实体不越界）
                     if span_idx == ent_span_idxes[self.cont_ent_idxes[idx]]:
                         cont_span_idx = i
                 else:
@@ -138,6 +155,12 @@ class SpanNerDataset(Dataset):
             input_ids = tokenizer.convert_tokens_to_ids(tokens + [tokenizer.pad_token] * pad_len)
             input_mask = [1] * len(tokens) + [0] * pad_len
             segment_ids = [sequence_a_segment_id] * len(tokens) + [pad_token_segment_id] * pad_len
+
+            # 在 example 处理的时候，将 token 越界的 span 已经处理了
+            # 原始 example 的 span 是不会越界的，所以其 cont_idx 是正常的
+            # 替换后的 example, 因为可能的span越界，可能会减少 span 数量， 这种情况下，负例的 cont_span_idx 为 0
+            # 这会对训练带来noise， 考虑到这种情况是少数，暂忽略不计
+            # 这里 span 可能越界，因为word变成token之后会变多，原来对word合法的span，对token不再合法
 
             numeric_features.append(
                 [input_ids, input_mask, segment_ids,
@@ -201,7 +224,6 @@ def load_examples(data_dir, mode, tokenizer):
     return examples
 
 
-# TODO, merges a list of samples to form a mini-batch of Tensor(s).
 def collate_fn(batch):
     """
     Convert batch samples to input tensors.
@@ -213,34 +235,24 @@ def collate_fn(batch):
         original sample features, contrastive sample features
 
     """
-    ori_feas = {
-        'input_ids': torch.LongTensor([sample[0][0] for sample in batch]),
-        'input_mask': torch.LongTensor([sample[0][1] for sample in batch]),
-        'segment_ids': torch.LongTensor([sample[0][2] for sample in batch]),
-        'span_token_idxes': torch.LongTensor([sample[0][3] for sample in batch]),
-        'span_labels': torch.LongTensor([sample[0][4] for sample in batch]),
-        'span_weights': torch.Tensor([sample[0][5] for sample in batch]),
-        'morph_idxes': torch.LongTensor([sample[0][6] for sample in batch]),
-        'span_lens': torch.LongTensor([sample[0][7] for sample in batch]),
-        'span_masks': torch.LongTensor([sample[0][8] for sample in batch]),
-        'cont_span_idx': torch.LongTensor([sample[0][9] for sample in batch]),
-        'span_word_idxes': torch.LongTensor([sample[0][10] for sample in batch])
-    }
-    cont_feas = {
-        'input_ids': torch.LongTensor([sample[1][0] for sample in batch]),
-        'input_mask': torch.LongTensor([sample[1][1] for sample in batch]),
-        'segment_ids': torch.LongTensor([sample[1][2] for sample in batch]),
-        'span_token_idxes': torch.LongTensor([sample[1][3] for sample in batch]),
-        'span_labels': torch.LongTensor([sample[1][4] for sample in batch]),
-        'span_weights': torch.Tensor([sample[1][5] for sample in batch]),
-        'morph_idxes': torch.LongTensor([sample[1][6] for sample in batch]),
-        'span_lens': torch.LongTensor([sample[1][7] for sample in batch]),
-        'span_masks': torch.LongTensor([sample[1][8] for sample in batch]),
-        'cont_span_idx': torch.LongTensor([sample[1][9] for sample in batch]),
-        'span_word_idxes': torch.LongTensor([sample[1][10] for sample in batch])
-    }
+    features = []
 
-    return ori_feas, cont_feas
+    for idx in range(len(['ori_feas', 'cont_feas'])):
+        features.append({
+            'input_ids': torch.LongTensor([sample[idx][0] for sample in batch]),
+            'input_mask': torch.LongTensor([sample[idx][1] for sample in batch]),
+            'segment_ids': torch.LongTensor([sample[idx][2] for sample in batch]),
+            'span_token_idxes': torch.LongTensor([sample[idx][3] for sample in batch]),
+            'span_labels': torch.LongTensor([sample[idx][4] for sample in batch]),
+            'span_weights': torch.Tensor([sample[idx][5] for sample in batch]),
+            'morph_idxes': torch.LongTensor([sample[idx][6] for sample in batch]),
+            'span_lens': torch.LongTensor([sample[idx][7] for sample in batch]),
+            'span_masks': torch.LongTensor([sample[idx][8] for sample in batch]),
+            'cont_span_idx': torch.LongTensor([sample[idx][9] for sample in batch]),
+            'span_word_idxes': torch.LongTensor([sample[idx][10] for sample in batch])
+        })
+
+    return features
 
 
 def convert_2_token_idx(offsets, span_idxes, max_len=128):

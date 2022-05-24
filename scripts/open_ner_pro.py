@@ -1,3 +1,6 @@
+"""
+Script for processing openNER dataset to Conll2003 format.
+"""
 # coding: utf-8
 
 import random

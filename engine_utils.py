@@ -76,12 +76,11 @@ def arg_parse():
         help="The maximum word num of a span.",
     )
 
-    parser.add_argument("--bert_lr", default=5e-5, type=float,
+    parser.add_argument("--bert_lr", default=1e-5, type=float,
                         help="The initial learning rate for BERT.")
-    parser.add_argument("--lr", default=5e-5, type=float,
+    parser.add_argument("--lr", default=1e-5, type=float,
                         help="The initial learning rate of classifier.")
-
-    parser.add_argument("--weight_decay", default=0.0, type=float,
+    parser.add_argument("--weight_decay", default=0.01, type=float,
                         help="Weight decay if we apply some.")
     parser.add_argument("--adam_epsilon", default=1e-8, type=float,
                         help="Epsilon for Adam optimizer.")
@@ -94,25 +93,11 @@ def arg_parse():
     parser.add_argument("--logging_steps", type=float, default=1.0,
                         help="Log every X updates steps.")
 
-    parser.add_argument(
-        "--eval_all_checkpoints",
-        action="store_true",
-        help="Evaluate all checkpoints starting with the same prefix "
-             "as model_name ending and ending with step number",
-    )
     # TODO, try different seed
     parser.add_argument("--seed", type=int, default=42,
                         help="random seed for initialization")
 
     return parser
-
-
-def arg_process(args):
-    torch.cuda.set_device(args.gpu_id)
-    device = torch.device("cuda", args.gpu_id)
-    args.device = device
-
-    return args
 
 
 def prepare_optimizer_scheduler(args, model, training_steps):
@@ -124,9 +109,8 @@ def prepare_optimizer_scheduler(args, model, training_steps):
     other_parameters = list(model.bn_encoder.named_parameters()) \
                        + list(model.span_layer.named_parameters()) \
                        + list(model.span_classifier.named_parameters()) \
-                       + list(model.oov_reg.named_parameters()) \
-                       + list(model.z_reg.named_parameters())
-    # + list(model.z_reg.named_parameters())
+                       + list(model.oov_reg.named_parameters())
+                       # + list(model.z_reg.named_parameters())
 
     optimizer_grouped_parameters = [
         # other params

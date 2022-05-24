@@ -1,5 +1,34 @@
+"""
+Calculate entities which group by their category.
+The output will be used when apply entities replacement.
+"""
+
 # coding: utf-8
+import numpy as np
 import json
+import os
+import Levenshtein
+
+import argparse
+
+from collections import OrderedDict
+from transformers import AutoTokenizer
+
+
+doc_str = "-DOCSTART-"
+
+parser = argparse.ArgumentParser()
+
+# Required parameters
+parser.add_argument(
+    "--data_dir",
+    default='../data/WNUT2017/',
+    type=str,
+    help="Path to data dir which contains the training file",
+)
+
+
+args = parser.parse_args()
 
 
 def get_entity(training_file, entity_out):
@@ -21,15 +50,32 @@ def get_entity(training_file, entity_out):
                 if "<split>".join(entity_span) not in vocab_dic[entity[0]]:
                     vocab_dic[entity[0]].append("<split>".join(entity_span))
 
+    out_dict = {}
+    # rank top10 similar entities for replacement
+    for k, v in vocab_dic.items():
+        labels_dict = {}
+        for entity in v:
+            levenshtein_list = []
+            for each_entity in v:
+                levenshtein_list.append(Levenshtein.distance(entity, each_entity))
+
+            sort_idx = (np.array(levenshtein_list).argsort()).tolist()
+            tmp_idx = sort_idx[1:11]
+            tmp_list = []
+            for idx in tmp_idx:
+                tmp_list.append(str(v[idx]))
+            labels_dict[entity] = tmp_list
+
+        out_dict[k] = labels_dict
+
     feo = open(entity_out, "w+", encoding='utf-8')
-    json.dump(vocab_dic, feo, ensure_ascii=False, indent=2)
+    json.dump(out_dict, feo, ensure_ascii=False, indent=2)
     print('Finish entity span collect!')
 
     fi.close()
     feo.close()
 
     return vocab_dic
-
 
 
 # 迭代式返回sample样本
@@ -102,6 +148,6 @@ def get_entities_bio(seq):
 
 
 if __name__ == "__main__":
-    origin_data = '../data/WNUT2017/origin/train.txt'
-    out_data = 'entity_old.json'
-    get_entity(origin_data, out_data)
+    training_file = os.path.join(args.data_dir, './train.txt')
+    out_data = os.path.join(args.data_dir, 'entity.json')
+    get_entity(training_file, out_data)

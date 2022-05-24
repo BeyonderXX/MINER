@@ -1,11 +1,37 @@
+"""
+Calculate Point wise mutual information between substring and entity labels.
+Save important substring to prevent operations on entities when they are replaced.
+"""
+
+import os
 import json
 import math
+import argparse
 
 from collections import OrderedDict
 from transformers import AutoTokenizer
 
 
 doc_str = "-DOCSTART-"
+
+parser = argparse.ArgumentParser()
+
+# Required parameters
+parser.add_argument(
+    "--data_dir",
+    default='../data/WNUT2017/',
+    type=str,
+    help="Path to data dir which contains the training file",
+)
+parser.add_argument(
+    "--tokenizer",
+    default='/root/MODELS/bert-base-uncased/',
+    type=str,
+    help="Tokenizer name or pre-trained model path",
+)
+
+args = parser.parse_args()
+
 
 
 def get_entities_bio(seq):
@@ -203,27 +229,8 @@ def count_len_subword(pmi_json):
 
 if __name__ == '__main__':
     # from prettyprinter import cpprint
-    training_file = '../data/WNUT2017/origin/train.txt'
-    entity_out = 'pmi.json'
-    entity_json = get_entity(training_file, entity_out)
-    # # eo = open(entity_out, 'r+', encoding='utf-8')
-    # # entity_json = json.load(eo)
-    # # eo.close()
-    pmi_out = 'pmi.json'
-    tokenizer_conf_path = '/root/MODELS/bert-base-uncased/'
-    PMI = calculate_PMI(entity_json, tokenizer_conf_path, entity_out)
+    training_file = os.path.join(args.data_dir, './train.txt')
+    pmi_out = os.path.join(args.data_dir, 'pmi.json')
+    entity_json = get_entity(args.training_file, pmi_out)
+    PMI = calculate_PMI(entity_json, args.tokenizer, pmi_out)
     out_labels(PMI)
-    #
-    # ratio = 0.05
-    #
-    # for entity_type in PMI:
-    #     token_pmi = PMI[entity_type]
-    #     cpprint("*"*50)
-    #     cpprint(entity_type)
-    #     cpprint(token_pmi[:int(len(token_pmi)*ratio)])
-
-
-    # # calculate length
-    # tokenizer_conf_path = '/root/MODELS/bert-base-uncased/'
-    # load_tokenizer(tokenizer_conf_path)
-    # count_len_subword(PMI)

@@ -1,8 +1,0 @@
-O
-PER
-GPE
-ORG
-FAC
-WEA
-LOC
-VEH

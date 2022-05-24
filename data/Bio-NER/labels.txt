@@ -1,0 +1,6 @@
+O
+DNA
+protein
+cell_type
+cell_line
+RNA
