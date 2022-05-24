@@ -11,7 +11,7 @@ This repository contains the code for our paper [MINER: Improving Out-of-Vocabul
 - [Overview](#Overview)
 - [Installation](#Installation)
 - [Preparation](#Preparation)
-- [How to Run](#How to Run)
+- [Training](#Training)
 - [Results](#Results)
 - [Citation](#Citation)
 
@@ -56,11 +56,11 @@ Bert, ALbert and Roberta can be applied directly as our encoders.
 
 
 
-## How to Run
+## Training
 
 Note that the beta and gama of different datasets and models are different, it is recommended to adjust slightly when applying other scenarios. 
 
-Here we give the parameters of **Bert-base-uncased** model, the performance will be further boosted when you use Bert-large.
+Here we give the parameters of **Bert-base-uncased** model, the performance will be further boosted when you use Bert-large. You can train and test in one click with the following commands.
 
 ```
 # CoNLL2003
