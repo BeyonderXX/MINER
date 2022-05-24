@@ -2,8 +2,8 @@
 
 <h3 align="center">MINER: Mutual Information based Named Entity Recognition</h3>
 <p align="center">
-This repository contains the code for our paper [MINER: Improving Out-of-Vocabulary Named Entity Recognition from an Information Theoretic Perspective](https://aclanthology.org/2022.acl-long.383.pdf) (ACL 2022).
 
+This repository contains the code for our paper [MINER: Improving Out-of-Vocabulary Named Entity Recognition from an Information Theoretic Perspective](https://aclanthology.org/2022.acl-long.383.pdf) (ACL 2022).
 
 
 ## Table of Contents
@@ -19,7 +19,7 @@ This repository contains the code for our paper [MINER: Improving Out-of-Vocabul
 
 NER models underperform when predicting entities that have not been seen during training, which is referred to as an Out-of-Vocabulary (OOV) problem. We propose MINER, a novel NER learning framework, to remedy this is- sue from an information-theoretic perspective.
 
-<img src="pic/MINER_architecture.pdf"/>
+<img src="pic/architecture.jpg"/>
 
 
 ## Installation
@@ -77,7 +77,7 @@ python -u main.py --epoch 50 --batch_size 64 --do_train --do_eval --do_predict -
 ```
 
 ## Results
-<img src="pic/results.pdf"/>
+<img src="pic/results.jpg"/>
 
 
 ## Citation
