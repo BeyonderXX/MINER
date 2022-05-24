@@ -11,15 +11,15 @@ This repository contains the code for our paper [MINER: Improving Out-of-Vocabul
 - [Overview](#Overview)
 - [Installation](#Installation)
 - [Preparation](#Preparation)
-- [How to Run](#How to Run?)
-- [Results](#Results at a Glance)
+- [How to Run](#How to Run)
+- [Results](#Results)
 - [Citation](#Citation)
 
 ## Overview
 
 NER models underperform when predicting entities that have not been seen during training, which is referred to as an Out-of-Vocabulary (OOV) problem. We propose MINER, a novel NER learning framework, to remedy this is- sue from an information-theoretic perspective.
 
-![avatar](./pic/MINER_architecture.pdf)
+<img src="pic/MINER_architecture.pdf"/>
 
 
 ## Installation
@@ -56,7 +56,7 @@ Bert, ALbert and Roberta can be applied directly as our encoders.
 
 
 
-## How to Run?
+## How to Run
 
 Note that the beta and gama of different datasets and models are different, it is recommended to adjust slightly when applying other scenarios. 
 
@@ -76,8 +76,8 @@ python -u main.py --epoch 50 --batch_size 64 --do_train --do_eval --do_predict -
 python -u main.py --epoch 50 --batch_size 64 --do_train --do_eval --do_predict --gama 0.0001 --beta 0.0001 --gpu_id 0 --lr 0.00001 --switch_ratio 0.5 --data_dir data_dir_path --output_dir out_path 
 ```
 
-## Results at a Glance
-![avatar](./pic/results.pdf)
+## Results
+<img src="pic/results.pdf"/>
 
 
 ## Citation
