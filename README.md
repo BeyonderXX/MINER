@@ -42,11 +42,11 @@ To generate new samples, we need to run the preprocessing script.
 
 `python ./scripts/cal_vocab.py --data_dir data_dir_path --tokenizer tokenizer_name`
 
-The script would output 'pmi.json' to your *data_dir *, which contains important substring to prevent operations on entities when they are replaced.
+The script would output `pmi.json` to your `data_dir `, which contains important substring to prevent operations on entities when they are replaced.
 
 `python ./scripts/collect_entity.py --data_dir data_dir_path`
 
-The script would output 'entity.json' to your *data_dir *, which contains entities and their neighbors.
+The script would output `entity.json` to your `data_dir `, which contains entities and their neighbors.
 
 
 
@@ -60,7 +60,7 @@ Bert, ALbert and Roberta can be applied directly as our encoders.
 
 Note that the beta and gama of different datasets and models are different, it is recommended to adjust slightly when applying other scenarios. 
 
-Here we give the parameters of **Bert-base-uncased** model, the performance will be further boosted when you use Bert-large. You can train and test in one click with the following commands.
+Here we give the parameters of **Bert-base-uncased** model, the performance will be further boosted when you use **Bert-large**. You can train and test in one click with the following commands.
 
 ```
 # CoNLL2003
